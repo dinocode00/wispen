@@ -28,6 +28,17 @@ Everything runs **on your devices** and costs nothing:
 - **Smart insertion**: adds the space and lowercases the first word when you dictate mid-sentence.
 - **History** with original vs. polished text and stats.
 
+**Wispen keyboard (iPhone)**
+- Full **QWERTY** keyboard with 123 / #+= layers, shift + caps lock (double-tap), auto-capitalization,
+  double-space “.”, key pop-ups, repeating delete (holds into whole words), and **drag the space bar to move the cursor**.
+- **Suggestions + conservative autocorrect** (your Wispen dictionary words come first and are never “corrected”;
+  backspace right after an autocorrection undoes it).
+- Toolbar: style picker, **✨ command mode**, **🎤 dictation**. While Wispen listens, a voice panel replaces the keys.
+
+**Dynamic Island & Lock Screen**
+- Live Activity shows the flow session (ready / listening with a timer / writing, and when it will end) with an
+  **End** button, and meetings (live timer → recap progress) with a **Stop & summarize** button.
+
 **Meetings (iPhone and Mac)**
 - Records 30–60+ minute meetings, transcribing on-device **while** you record (live transcript).
 - **Audio is never saved** — each ~30 s chunk is deleted the moment it's transcribed.
@@ -71,13 +82,14 @@ Re-run `xcodegen` whenever you pull changes that add files.
 
 ### 2. Sign in and pick your team
 
-Xcode › Settings › Accounts → add your Apple ID. Then for **each target** (Wispen, WispenKeyboard, WispenMac)
+Xcode › Settings › Accounts → add your Apple ID. Then for **each target** (Wispen, WispenKeyboard, WispenWidgets, WispenMac)
 → *Signing & Capabilities* → Team → your *(Personal Team)*. (Skip this if you set `WISPEN_TEAM_ID`.)
 
 ### 3. Install on iPhone
 
 1. Plug in your iPhone, enable **Developer Mode** (Settings › Privacy & Security › Developer Mode).
-2. Select the **Wispen** scheme and your iPhone, press **Run** (⌘R).
+2. Select the **Wispen** scheme and your iPhone, press **Run** (⌘R). (This also installs the keyboard and the
+   Dynamic Island widget — 3 App IDs, well within a free account's limit.)
 3. On the iPhone: Settings › General › VPN & Device Management → trust your developer certificate.
 4. Open Wispen → it downloads the speech model (~630 MB, use Wi-Fi). The first load takes a couple of minutes
    while iOS optimizes it for the Neural Engine; after that it's fast.
@@ -116,14 +128,17 @@ developer account.)
 ## Project layout
 
 ```
-Packages/WispenCore/   Platform-independent logic + 51 unit tests (runs on Linux/macOS: `swift test`)
-  Text/                Filler removal, self-corrections, lists, dictionary, snippets, styles, insertion
+Packages/WispenCore/   Platform-independent logic + 57 unit tests (runs on Linux/macOS: `swift test`)
+  Text/                Filler removal, self-corrections, lists, dictionary, snippets, styles, insertion,
+                       keyboard typing rules (auto-caps, autocorrect, suggestions)
   AI/                  Prompts, cleanup pipeline + guardrails, command mode, Ollama client
   Meetings/            Map-reduce recap for long meetings, recap parser, Q&A retrieval
   Storage/             JSON storage, keyboard ⇄ app IPC
 Apps/Shared/           iOS + macOS: audio capture, WhisperKit, Apple Intelligence, engines, shared SwiftUI
 Apps/iOS/              iPhone app (flow session, home, settings)
-Apps/Keyboard/         Wispen keyboard extension
+Apps/Keyboard/         Wispen keyboard extension (QWERTY + voice)
+Apps/LiveActivity/     Live Activity model + Lock Screen button intents (shared by app and widget)
+Apps/Widgets/          Dynamic Island / Lock Screen UI (widget extension)
 Apps/macOS/            Menu-bar app (fn hotkey, overlay, paste, system-audio capture)
 project.yml            XcodeGen project spec
 ```
@@ -152,4 +167,6 @@ cd Packages/WispenCore && swift test
 - **“Apple Intelligence unavailable”** → turn it on in Settings, and wait for its model to download. Until then
   Wispen uses rule-based cleanup, and meeting recaps wait (“Generate recap” later).
 - **Mac doesn't type** → re-check Accessibility. After rebuilding, macOS may need you to toggle Wispen off/on there.
+- **No Dynamic Island / Lock Screen activity** → Settings › Wispen › Live Activities must be on, and the toggle in
+  Wispen › Settings.
 - **App Group errors when building** → `WISPEN_BUNDLE_PREFIX` must be unique; change it and re-run `xcodegen`.

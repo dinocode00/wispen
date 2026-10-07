@@ -37,10 +37,12 @@ targets:
     sources:
       - path: Apps/iOS
       - path: Apps/Shared
+      - path: Apps/LiveActivity
     dependencies:
       - package: WispenCore
       - package: WhisperKit
       - target: WispenKeyboard
+      - target: WispenWidgets
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: $(WISPEN_BUNDLE_PREFIX).wispen
@@ -61,6 +63,7 @@ targets:
         WispenAppGroup: $(WISPEN_APP_GROUP)
         NSMicrophoneUsageDescription: Wispen listens only while you dictate or record a meeting. Speech is transcribed on your iPhone and never leaves it.
         UIBackgroundModes: [audio]
+        NSSupportsLiveActivities: true
         UILaunchScreen: {}
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
         UIApplicationSceneManifest:
@@ -106,6 +109,28 @@ targets:
             PrefersRightToLeft: false
             PrimaryLanguage: en-US
 
+  # ───────────────── Dynamic Island / Lock Screen (Live Activity) ─────────────────
+  WispenWidgets:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: Apps/Widgets
+      - path: Apps/LiveActivity
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(WISPEN_BUNDLE_PREFIX).wispen.widgets
+        PRODUCT_NAME: WispenWidgets
+        TARGETED_DEVICE_FAMILY: "1"
+        APPLICATION_EXTENSION_API_ONLY: YES
+    info:
+      path: Config/Generated/WispenWidgets-Info.plist
+      properties:
+        CFBundleDisplayName: Wispen
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+
   # ───────────────────────── Mac menu-bar app ─────────────────────────
   WispenMac:
     type: application
@@ -146,6 +171,7 @@ schemes:
       targets:
         Wispen: all
         WispenKeyboard: all
+        WispenWidgets: all
     run:
       config: Debug
   WispenMac:

@@ -1,195 +1,208 @@
 import SwiftUI
 import WispenCore
 
+/// Wispen keyboard: a full QWERTY keyboard with a toolbar (style, suggestions, ✨ command, 🎤 mic).
+/// While Wispen is listening or writing, a voice panel replaces the keys.
 struct KeyboardView: View {
     @ObservedObject var model: KeyboardModel
     let globeKey: GlobeKey
 
-    private let accent = Color(red: 0.42, green: 0.36, blue: 0.95)
+    var body: some View {
+        VStack(spacing: 0) {
+            Toolbar(model: model)
+                .frame(height: 44)
+            Group {
+                if model.showsVoicePanel {
+                    VoicePanel(model: model)
+                } else if model.showStyles {
+                    StylesPanel(model: model)
+                } else {
+                    KeysView(model: model, globeKey: globeKey)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+}
+
+// MARK: Toolbar
+
+private struct Toolbar: View {
+    @ObservedObject var model: KeyboardModel
 
     var body: some View {
-        VStack(spacing: 8) {
-            styleBar
-            statusLine
-            HStack(alignment: .center, spacing: 0) {
-                if model.isRecording {
-                    sideButton(icon: "xmark", label: "Cancel") { model.cancel() }
-                } else {
-                    sideButton(icon: "wand.and.stars", label: model.hasSelection ? "Edit" : "Write") { model.commandTapped() }
-                        .opacity(model.isWorking ? 0.3 : 1)
-                }
-                Spacer()
-                micButton
-                Spacer()
-                DeleteKey { model.deleteBackward() }
+        HStack(spacing: 6) {
+            Button { model.showStyles.toggle() } label: {
+                Text(model.style.emoji)
+                    .font(.system(size: 18))
+                    .frame(width: 38, height: 34)
+                    .background(model.showStyles ? KeyColors.accent.opacity(0.25) : Color.clear, in: RoundedRectangle(cornerRadius: 8))
             }
-            .padding(.horizontal, 18)
-            bottomRow
-        }
-        .padding(.top, 8)
-        .padding(.bottom, 6)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Style: \(model.style.name)")
 
-    // MARK: Pieces
+            middle
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-    private var styleBar: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 6) {
-                ForEach(model.styles) { style in
-                    Button { model.selectStyle(style.id) } label: {
-                        Text("\(style.emoji) \(style.name)")
-                            .font(.footnote.weight(.medium))
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 6)
-                            .background(model.styleID == style.id ? accent.opacity(0.2) : Color(uiColor: .secondarySystemBackground),
-                                        in: Capsule())
-                            .foregroundStyle(model.styleID == style.id ? accent : Color.primary)
-                    }
-                    .buttonStyle(.plain)
-                }
-                if model.canUndo {
-                    Button { model.undo() } label: {
-                        Label("Undo", systemImage: "arrow.uturn.backward")
-                            .font(.footnote.weight(.medium))
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 6)
-                            .background(Color(uiColor: .secondarySystemBackground), in: Capsule())
-                    }
-                    .buttonStyle(.plain)
-                }
+            Button { model.commandTapped() } label: {
+                Image(systemName: "wand.and.stars")
+                    .font(.system(size: 17, weight: .medium))
+                    .foregroundStyle(model.hasSelection ? KeyColors.accent : Color.primary)
+                    .frame(width: 38, height: 34)
             }
-            .padding(.horizontal, 10)
-        }
-    }
+            .buttonStyle(.plain)
+            .accessibilityLabel(model.hasSelection ? "Edit selection by voice" : "Write by voice")
 
-    private var statusLine: some View {
-        Text(statusText)
-            .font(.caption)
-            .foregroundStyle(model.message != nil ? Color.orange : Color.secondary)
-            .lineLimit(2)
-            .multilineTextAlignment(.center)
-            .padding(.horizontal, 16)
-            .frame(height: 30)
-    }
-
-    private var statusText: String {
-        if let m = model.message { return m }
-        switch model.state.phase {
-        case .recording: return model.state.mode == .command ? "Say what to do with the text… tap to finish" : "Listening… tap to finish"
-        case .transcribing: return "Transcribing…"
-        case .polishing: return model.state.mode == .command ? "Rewriting…" : "Polishing…"
-        case .error: return model.state.message ?? "Something went wrong"
-        case .ready, .inactive:
-            if model.waitingForApp { return "Starting…" }
-            if model.hasSelection { return "Tap the mic to edit the selected text by voice" }
-            return model.state.phase == .ready ? "Tap the mic and talk" : "Tap the mic to start Wispen"
-        }
-    }
-
-    private var micButton: some View {
-        Button { model.micTapped() } label: {
-            ZStack {
-                Circle()
-                    .fill(model.isRecording ? Color.red : accent)
-                    .frame(width: 92, height: 92)
-                    .shadow(color: (model.isRecording ? Color.red : accent).opacity(0.35), radius: 10, y: 4)
-                if model.isRecording {
-                    PulsingBars()
-                } else if model.isWorking || model.waitingForApp {
-                    ProgressView().tint(.white).scaleEffect(1.3)
-                } else {
-                    Image(systemName: model.hasSelection ? "wand.and.stars" : "mic.fill")
-                        .font(.system(size: 34, weight: .semibold))
+            Button { model.micTapped() } label: {
+                ZStack {
+                    Circle().fill(model.isRecording ? Color.red : KeyColors.accent).frame(width: 36, height: 36)
+                    Image(systemName: model.isRecording ? "stop.fill" : "mic.fill")
+                        .font(.system(size: 16, weight: .semibold))
                         .foregroundStyle(.white)
                 }
             }
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(model.isRecording ? "Stop dictation" : "Start dictation")
-    }
-
-    private func sideButton(icon: String, label: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            VStack(spacing: 4) {
-                Image(systemName: icon).font(.system(size: 20))
-                Text(label).font(.caption2)
-            }
-            .frame(width: 64, height: 54)
-            .background(Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10))
-            .foregroundStyle(Color.primary)
-        }
-        .buttonStyle(.plain)
-    }
-
-    private var bottomRow: some View {
-        HStack(spacing: 6) {
-            if model.needsGlobeKey {
-                globeKey.frame(width: 44, height: 42)
-            }
-            key(".") { model.insert(".") }
-            key(",") { model.insert(",") }
-            key("?") { model.insert("?") }
-            Button { model.insert(" ") } label: {
-                Text("space").font(.callout)
-                    .frame(maxWidth: .infinity, minHeight: 42)
-                    .background(Color(uiColor: .systemBackground), in: RoundedRectangle(cornerRadius: 8))
-                    .foregroundStyle(Color.primary)
-            }
             .buttonStyle(.plain)
-            Button { model.insert("\n") } label: {
-                Image(systemName: "return")
-                    .frame(width: 58, height: 42)
-                    .background(Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: 8))
-                    .foregroundStyle(Color.primary)
-            }
-            .buttonStyle(.plain)
+            .accessibilityLabel(model.isRecording ? "Stop dictation" : "Dictate")
         }
         .padding(.horizontal, 6)
     }
 
-    private func key(_ label: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Text(label).font(.title3)
-                .frame(width: 34, height: 42)
-                .background(Color(uiColor: .systemBackground), in: RoundedRectangle(cornerRadius: 8))
+    @ViewBuilder
+    private var middle: some View {
+        if let message = model.message {
+            Text(message)
+                .font(.caption)
+                .foregroundStyle(Color.orange)
+                .lineLimit(2)
+                .multilineTextAlignment(.center)
+        } else if model.canUndo && model.currentWord.isEmpty {
+            Button { model.undo() } label: {
+                Label("Undo dictation", systemImage: "arrow.uturn.backward")
+                    .font(.footnote.weight(.medium))
+                    .foregroundStyle(Color.primary)
+            }
+            .buttonStyle(.plain)
+        } else if !model.suggestions.isEmpty {
+            HStack(spacing: 0) {
+                suggestion("“\(model.currentWord)”", value: model.currentWord)
+                ForEach(model.suggestions, id: \.self) { s in
+                    Divider().frame(height: 22)
+                    suggestion(s, value: s)
+                }
+            }
+        } else {
+            Text(model.hasSelection ? "Tap ✨ or 🎤 to edit the selection by voice" : "\(model.style.name) · tap 🎤 to dictate")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+        }
+    }
+
+    private func suggestion(_ title: String, value: String) -> some View {
+        Button { model.pick(value) } label: {
+            Text(title)
+                .font(.system(size: 16))
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
                 .foregroundStyle(Color.primary)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
     }
 }
 
-/// Backspace that repeats while held.
-struct DeleteKey: View {
-    var action: () -> Void
-    @State private var timer: Timer?
+// MARK: Voice panel
+
+private struct VoicePanel: View {
+    @ObservedObject var model: KeyboardModel
 
     var body: some View {
-        VStack(spacing: 4) {
-            Image(systemName: "delete.left").font(.system(size: 20))
-            Text("Delete").font(.caption2)
-        }
-        .frame(width: 64, height: 54)
-        .background(Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10))
-        .contentShape(Rectangle())
-        .onTapGesture { action() }
-        .onLongPressGesture(minimumDuration: 0.35, pressing: { pressing in
-            if pressing {
-                timer?.invalidate()
-                timer = Timer.scheduledTimer(withTimeInterval: 0.35, repeats: false) { _ in
-                    Task { @MainActor in
-                        timer = Timer.scheduledTimer(withTimeInterval: 0.08, repeats: true) { _ in
-                            Task { @MainActor in action() }
+        VStack(spacing: 10) {
+            Text(statusText)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal)
+            HStack {
+                Button { model.cancel() } label: {
+                    VStack(spacing: 4) {
+                        Image(systemName: "xmark").font(.system(size: 20))
+                        Text("Cancel").font(.caption2)
+                    }
+                    .frame(width: 70, height: 56)
+                    .background(KeyColors.function.opacity(0.6), in: RoundedRectangle(cornerRadius: 10))
+                    .foregroundStyle(Color.primary)
+                }
+                .buttonStyle(.plain)
+                .opacity(model.isRecording || model.waitingForApp ? 1 : 0)
+
+                Spacer()
+
+                Button { model.micTapped() } label: {
+                    ZStack {
+                        Circle()
+                            .fill(model.isRecording ? Color.red : KeyColors.accent)
+                            .frame(width: 96, height: 96)
+                            .shadow(color: (model.isRecording ? Color.red : KeyColors.accent).opacity(0.35), radius: 10, y: 4)
+                        if model.isRecording {
+                            PulsingBars()
+                        } else {
+                            ProgressView().tint(.white).scaleEffect(1.4)
                         }
                     }
                 }
-            } else {
-                timer?.invalidate()
-                timer = nil
+                .buttonStyle(.plain)
+                .disabled(!model.isRecording)
+
+                Spacer()
+
+                VStack(spacing: 4) {
+                    Text(model.style.emoji).font(.system(size: 22))
+                    Text(model.state.mode == .command ? "Command" : model.style.name).font(.caption2)
+                }
+                .frame(width: 70, height: 56)
+                .foregroundStyle(.secondary)
             }
-        }, perform: {})
-        .accessibilityLabel("Delete")
-        .accessibilityAddTraits(.isButton)
+            .padding(.horizontal, 20)
+        }
+    }
+
+    private var statusText: String {
+        switch model.state.phase {
+        case .recording:
+            return model.state.mode == .command ? "Say what to do with the text… tap to finish" : "Listening… tap to finish"
+        case .transcribing: return "Transcribing…"
+        case .polishing: return model.state.mode == .command ? "Rewriting…" : "Polishing…"
+        default: return "Starting Wispen…"
+        }
+    }
+}
+
+// MARK: Styles panel
+
+private struct StylesPanel: View {
+    @ObservedObject var model: KeyboardModel
+
+    var body: some View {
+        ScrollView {
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 110), spacing: 8)], spacing: 8) {
+                ForEach(model.styles) { style in
+                    Button { model.selectStyle(style.id) } label: {
+                        VStack(spacing: 2) {
+                            Text(style.emoji).font(.system(size: 22))
+                            Text(style.name).font(.footnote.weight(.medium)).lineLimit(1)
+                        }
+                        .frame(maxWidth: .infinity, minHeight: 58)
+                        .background(model.styleID == style.id ? KeyColors.accent.opacity(0.25) : KeyColors.character,
+                                    in: RoundedRectangle(cornerRadius: 10))
+                        .foregroundStyle(model.styleID == style.id ? KeyColors.accent : Color.primary)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(10)
+        }
     }
 }
 

@@ -197,6 +197,29 @@ struct SettingsView: View {
 
     var body: some View {
         Form {
+            Section {
+                Toggle("Auto-correction", isOn: $app.settings.keyboardAutoCorrect)
+                Toggle("Suggestions", isOn: $app.settings.keyboardSuggestions)
+                Toggle("Auto-capitalization", isOn: $app.settings.keyboardAutoCapitalize)
+                Toggle("“.” shortcut (double-tap space)", isOn: $app.settings.keyboardDoubleSpacePeriod)
+                Toggle("Haptic feedback", isOn: $app.settings.keyboardHaptics)
+                Toggle("Key click sounds", isOn: $app.settings.keyboardSounds)
+            } header: {
+                Text("Wispen keyboard")
+            } footer: {
+                Text("Changes apply the next time the keyboard opens. Haptics and sounds need Allow Full Access. Drag the space bar to move the cursor; backspace right after an autocorrection undoes it.")
+            }
+            Section {
+                Toggle("Dynamic Island & Lock Screen", isOn: $app.settings.liveActivities)
+                    .onChange(of: app.settings.liveActivities) {
+                        if !app.settings.liveActivities {
+                            LiveActivityController.shared.endFlow()
+                            LiveActivityController.shared.endMeeting()
+                        }
+                    }
+            } footer: {
+                Text("Shows the flow session and meeting recordings in the Dynamic Island and on the Lock Screen, with buttons to end them.")
+            }
             SharedSettingsSections()
             Section {
                 LabeledContent("Version", value: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0")
