@@ -1,0 +1,19 @@
+// ─────────────────────────────────────────────────────────────────────────────
+//  Your settings — edit these two lines, then run `xcodegen` (see README).
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Must be unique to you, e.g. com.yourname  (letters, numbers, dots, hyphens).
+WISPEN_BUNDLE_PREFIX = com.yourname
+
+// Your Apple team ID. Xcode › Settings › Accounts › (your Apple ID) shows your
+// "Personal Team"; you can also leave this empty and pick the team in Xcode's
+// Signing & Capabilities tab for each target.
+WISPEN_TEAM_ID =
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+WISPEN_APP_GROUP = group.$(WISPEN_BUNDLE_PREFIX).wispen
+DEVELOPMENT_TEAM = $(WISPEN_TEAM_ID)
+CODE_SIGN_STYLE = Automatic
+MARKETING_VERSION = 1.0
+CURRENT_PROJECT_VERSION = 1
