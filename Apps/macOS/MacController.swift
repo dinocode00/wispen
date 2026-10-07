@@ -21,6 +21,9 @@ final class MacController: ObservableObject {
     private var mode: DictationMode = .dictation
     private var selectedText: String?
     private var targetApp: NSRunningApplication?
+    /// A finish/cancel that arrived while `begin` was still copying the selection.
+    private var isBeginning = false
+    private var pendingEnd: HotkeyMonitor.Event?
     private var bag: Set<AnyCancellable> = []
 
     private init() {
@@ -50,15 +53,29 @@ final class MacController: ObservableObject {
     // MARK: Hotkey
 
     private func handle(_ event: HotkeyMonitor.Event) {
+        if isBeginning {
+            // Still copying the selection: remember how this press ended and apply it afterwards.
+            if case .begin = event { return }
+            pendingEnd = event
+            return
+        }
         switch event {
-        case .begin(let command): Task { await begin(command: command) }
+        case .begin(let command):
+            isBeginning = true // set synchronously so a quick release can't slip in before begin() runs
+            Task { await begin(command: command) }
         case .finish: Task { await finish() }
         case .cancel: cancel()
         }
     }
 
     func begin(command: Bool) async {
-        guard engine.phase == .idle, !recorder.isRecording else { hotkey.reset(); return }
+        isBeginning = true
+        guard engine.phase == .idle, !recorder.isRecording else {
+            isBeginning = false
+            pendingEnd = nil
+            hotkey.reset()
+            return
+        }
         targetApp = NSWorkspace.shared.frontmostApplication
         mode = command ? .command : .dictation
         selectedText = nil
@@ -70,6 +87,11 @@ final class MacController: ObservableObject {
         } catch {
             hotkey.reset()
             flash(error.localizedDescription)
+        }
+        isBeginning = false
+        if let pending = pendingEnd {
+            pendingEnd = nil
+            handle(pending)
         }
     }
 
