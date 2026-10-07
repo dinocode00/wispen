@@ -96,6 +96,13 @@ final class FlowSessionController: ObservableObject {
         }
     }
 
+    /// Tell the keyboard we can't serve its request right now (e.g. a meeting is using the mic).
+    func reject(url: URL, reason: String) {
+        guard url.scheme == FlowIPC.urlScheme, let request = FlowIPC.requestFile.load() else { return }
+        try? FlowIPC.resultFile.save(FlowResult(requestID: request.id, mode: request.mode, text: "", error: reason))
+        DarwinNotifier.shared.post(.result)
+    }
+
     func handlePendingRequest() {
         guard let request = FlowIPC.requestFile.load() else { return }
         let key = "\(request.id):\(request.action.rawValue)"

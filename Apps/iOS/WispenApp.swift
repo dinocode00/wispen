@@ -16,7 +16,10 @@ struct WispenApp: App {
                 .environmentObject(recorder)
                 .tint(.wispenAccent)
                 .onOpenURL { url in
-                    if recorder.isRecording { return } // The mic is busy with a meeting.
+                    if recorder.isRecording {
+                        flow.reject(url: url, reason: "Wispen is recording a meeting. Stop it to dictate.")
+                        return
+                    }
                     flow.handle(url: url)
                 }
                 .onChange(of: scenePhase) {
