@@ -6,3 +6,5 @@ DerivedData/
 .DS_Store
 Packages/WispenCore/Package.resolved
 Config/Generated/
+Config/Local.xcconfig
+.build-wispen/

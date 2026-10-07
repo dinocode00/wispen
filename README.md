@@ -61,55 +61,46 @@ iOS doesn't let keyboards use the microphone, so Wispen does what Wispr Flow doe
 
 ## Setup
 
-You need a Mac with **Xcode 26** (free from the App Store) and your iPhone. A free Apple ID works.
+You need a Mac and your iPhone. A free Apple ID works. Most of the setup is one script.
 
-### 1. Generate the Xcode project
+**Before running it (one time, ~5 min of clicking):**
 
-```bash
-brew install xcodegen          # one-time (https://brew.sh if you don't have Homebrew)
-git clone <this repo> && cd wispen
-```
+1. Install **Xcode 26+** from the App Store (free) and open it once.
+2. In Xcode: **Settings (⌘,) › Accounts › + › Apple ID** and sign in.
+3. Plug your iPhone into the Mac, unlock it, tap **Trust This Computer**.
 
-Open `Config/Wispen.xcconfig` and set **`WISPEN_BUNDLE_PREFIX`** to something unique to you
-(e.g. `com.rexsmith`). Optionally set `WISPEN_TEAM_ID`. Then:
+**Then, in Terminal:**
 
 ```bash
-xcodegen
-open Wispen.xcodeproj
+git clone -b claude/wispen-v1 https://github.com/dinocode00/wispen.git ~/wispen && ~/wispen/scripts/setup.sh
 ```
 
-Re-run `xcodegen` whenever you pull changes that add files.
+The script installs Homebrew/XcodeGen if needed, finds your Personal Team, picks unique bundle IDs, generates the
+project, builds and installs the **Mac app** (in `/Applications`, opens at login) and the **iPhone app**, and offers
+to **reinstall it on your iPhone automatically every week** (free Apple IDs expire apps after 7 days).
+Re-run it any time, e.g. after `git pull`. Options: `--mac`, `--iphone`, `--auto-refresh-on`, `--auto-refresh-off`.
 
-### 2. Sign in and pick your team
+**What only you can tap** (the script tells you when):
 
-Xcode › Settings › Accounts → add your Apple ID. Then for **each target** (Wispen, WispenKeyboard, WispenWidgets, WispenMac)
-→ *Signing & Capabilities* → Team → your *(Personal Team)*. (Skip this if you set `WISPEN_TEAM_ID`.)
+- **iPhone, first install only:** Settings › Privacy & Security › **Developer Mode** → On (iPhone restarts), and
+  Settings › General › VPN & Device Management › your Apple ID › **Trust**. Then re-run `~/wispen/scripts/setup.sh --iphone`.
+- **iPhone, in Wispen:** allow the microphone; let it download the speech model (~630 MB, Wi-Fi). Then Flow tab ›
+  Setup › *Add the Wispen keyboard* › **Open** → Keyboards › turn on **Wispen** and **Allow Full Access**.
+- **iPhone:** Apple Intelligence on (Settings › Apple Intelligence & Siri).
+- **Mac:** allow **Microphone**, and switch on **Wispen** in the Accessibility pane the script opens.
+  If `fn` opens the emoji picker: System Settings › Keyboard › *Press 🌐 key to* → **Do Nothing**.
 
-### 3. Install on iPhone
+<details><summary>Manual setup (without the script)</summary>
 
-1. Plug in your iPhone, enable **Developer Mode** (Settings › Privacy & Security › Developer Mode).
-2. Select the **Wispen** scheme and your iPhone, press **Run** (⌘R). (This also installs the keyboard and the
-   Dynamic Island widget — 3 App IDs, well within a free account's limit.)
-3. On the iPhone: Settings › General › VPN & Device Management → trust your developer certificate.
-4. Open Wispen → it downloads the speech model (~630 MB, use Wi-Fi). The first load takes a couple of minutes
-   while iOS optimizes it for the Neural Engine; after that it's fast.
-5. Add the keyboard: Settings › General › Keyboard › Keyboards › **Add New Keyboard… › Wispen**, then tap
-   **Wispen** and turn on **Allow Full Access**. (Required so the keyboard can talk to the app. Nothing leaves
-   your phone — there's no network code in the keyboard.)
-6. Make sure **Apple Intelligence** is on (Settings › Apple Intelligence & Siri).
+```bash
+brew install xcodegen
+cd wispen && xcodegen && open Wispen.xcodeproj
+```
 
-> **Free Apple ID note:** apps you install this way expire after **7 days**. Just press Run in Xcode again
-> (your data is kept). [SideStore](https://sidestore.io) can refresh it automatically. A paid developer
-> account ($99/yr) makes it last a year.
-
-### 4. Install on Mac
-
-1. Select the **WispenMac** scheme → *My Mac* → **Run**. A waveform icon appears in the menu bar.
-2. Allow **Microphone**, and **Accessibility** (System Settings › Privacy & Security › Accessibility → Wispen)
-   so it can type for you.
-3. If `fn` opens the emoji picker: System Settings › Keyboard › *Press 🌐 key to* → **Do Nothing**.
-4. To keep it, drag `Wispen.app` from Xcode's Products folder (Product › Show Build Folder) into `/Applications`,
-   and add it to System Settings › General › Login Items.
+Set `WISPEN_BUNDLE_PREFIX` (unique, e.g. `com.yourname`) and `WISPEN_TEAM_ID` in `Config/Local.xcconfig`
+(or pick your team per target under *Signing & Capabilities*), then Run the **Wispen** scheme on your iPhone and the
+**WispenMac** scheme on *My Mac*.
+</details>
 
 | Mac shortcut | Does |
 |---|---|
