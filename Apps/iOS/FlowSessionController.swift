@@ -191,5 +191,6 @@ final class FlowSessionController: ObservableObject {
             sessionEndsAt: phase == .inactive ? nil : idleDeadline)
         try? FlowIPC.stateFile.save(state)
         DarwinNotifier.shared.post(.state)
+        LiveActivityController.shared.updateFlow(state, recordingStartedAt: engine.recordingStartedAt)
     }
 }

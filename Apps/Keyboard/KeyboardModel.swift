@@ -1,9 +1,14 @@
+import AudioToolbox
 import SwiftUI
 import UIKit
 import WispenCore
 
 @MainActor
 final class KeyboardModel: ObservableObject {
+    enum Layer { case letters, numbers, symbols }
+    enum Shift { case off, once, locked }
+
+    // Dictation
     @Published var state: FlowSessionState = .inactive
     @Published var styleID: String
     @Published var hasSelection = false
@@ -12,20 +17,42 @@ final class KeyboardModel: ObservableObject {
     /// Set between tapping the mic and the app confirming it's recording.
     @Published private var waitingSince: Date?
 
+    // Typing
+    @Published var layer: Layer = .letters
+    @Published var shift: Shift = .once
+    @Published var suggestions: [String] = []
+    @Published var currentWord = ""
+    @Published var showStyles = false
+    @Published private(set) var returnKeyLabel: String?
+
     let styles: [DictationStyle]
+    let settings: WispenSettings
     private let store = WispenStore()
     private weak var controller: KeyboardViewController?
     private var poll: Timer?
+    private var messageTimer: Timer?
     private var lastInsertion: (text: String, replaced: String?)?
+    private var lastAutocorrect: (original: String, corrected: String)?
+    private var lastShiftTap = Date.distantPast
     private let defaults = UserDefaults.standard
     private let protectedTerms: [String]
+    private let checker = UITextChecker()
+    private lazy var checkerLanguage: String = {
+        let available = UITextChecker.availableLanguages
+        let preferred = Locale.preferredLanguages.first?.replacingOccurrences(of: "-", with: "_") ?? "en_US"
+        if available.contains(preferred) { return preferred }
+        let code = String(preferred.prefix(2))
+        return available.first { $0.hasPrefix(code) } ?? "en_US"
+    }()
 
     init(controller: KeyboardViewController) {
         self.controller = controller
         styles = store.allStyles()
         protectedTerms = store.loadDictionary().map(\.term)
-        let settings = store.loadSettings()
+        settings = store.loadSettings()
         styleID = UserDefaults.standard.string(forKey: "keyboardStyleID") ?? settings.defaultStyleID
+        // Your dictionary words are never "misspelled".
+        for term in protectedTerms where !UITextChecker.hasLearnedWord(term) { UITextChecker.learnWord(term) }
 
         DarwinNotifier.shared.observe(.state) { [weak self] in Task { @MainActor in self?.refreshState() } }
         DarwinNotifier.shared.observe(.result) { [weak self] in Task { @MainActor in self?.consumeResult() } }
@@ -41,9 +68,13 @@ final class KeyboardModel: ObservableObject {
     var needsGlobeKey: Bool { controller?.needsInputModeSwitchKey ?? true }
     var style: DictationStyle { styles.first { $0.id == styleID } ?? .polished }
 
+    /// The voice panel replaces the keys while Wispen is listening or writing.
+    var showsVoicePanel: Bool { isRecording || isWorking || waitingForApp }
+
     func selectStyle(_ id: String) {
         styleID = id
         defaults.set(id, forKey: "keyboardStyleID")
+        showStyles = false
     }
 
     // MARK: Lifecycle
@@ -68,8 +99,12 @@ final class KeyboardModel: ObservableObject {
         poll = nil
     }
 
+    /// The host app changed the text or selection.
     func refreshContext() {
         hasSelection = !(proxy?.selectedText ?? "").isEmpty
+        returnKeyLabel = Self.label(for: proxy?.returnKeyType)
+        updateShift()
+        updateSuggestions()
     }
 
     func refreshState() {
@@ -79,10 +114,18 @@ final class KeyboardModel: ObservableObject {
         }
         state = s.isAlive() ? s : .inactive
         if state.phase == .recording || state.phase == .error { waitingSince = nil }
-        if state.phase == .error, let m = state.message { message = m }
+        if state.phase == .error, let m = state.message { show(m) }
     }
 
-    // MARK: Actions
+    private func show(_ text: String) {
+        message = text
+        messageTimer?.invalidate()
+        messageTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: false) { [weak self] _ in
+            Task { @MainActor in self?.message = nil }
+        }
+    }
+
+    // MARK: Dictation
 
     var isRecording: Bool { state.phase == .recording }
     var isWorking: Bool { state.phase == .transcribing || state.phase == .polishing }
@@ -105,7 +148,7 @@ final class KeyboardModel: ObservableObject {
 
     private func start(mode: DictationMode) {
         guard hasFullAccess else {
-            message = "Turn on Allow Full Access: Settings › General › Keyboard › Keyboards › Wispen."
+            show("Turn on Allow Full Access: Settings › General › Keyboard › Keyboards › Wispen.")
             return
         }
         let request = FlowRequest(action: .start, mode: mode, styleID: styleID,
@@ -113,7 +156,7 @@ final class KeyboardModel: ObservableObject {
         do {
             try FlowIPC.requestFile.save(request)
         } catch {
-            message = "Couldn't reach the Wispen app. Is Allow Full Access on?"
+            show("Couldn't reach the Wispen app. Is Allow Full Access on?")
             return
         }
         lightHaptic()
@@ -155,7 +198,7 @@ final class KeyboardModel: ObservableObject {
         waitingSince = nil
 
         if let error = result.error {
-            message = error
+            show(error)
             return
         }
         guard let proxy, !result.text.isEmpty else { return }
@@ -169,8 +212,10 @@ final class KeyboardModel: ObservableObject {
         }
         proxy.insertText(text)
         lastInsertion = (text, result.mode == .command ? selected : nil)
+        lastAutocorrect = nil
         canUndo = true
         successHaptic()
+        refreshContext()
     }
 
     func undo() {
@@ -179,18 +224,179 @@ final class KeyboardModel: ObservableObject {
         if let original = last.replaced { proxy.insertText(original) }
         lastInsertion = nil
         canUndo = false
+        refreshContext()
     }
 
-    // MARK: Basic keys
+    // MARK: Typing
 
-    func insert(_ s: String) {
-        proxy?.insertText(s)
-        canUndo = false
+    func keyDown() {
+        if settings.keyboardHaptics { lightHaptic() }
+        if settings.keyboardSounds, hasFullAccess { AudioServicesPlaySystemSound(1104) }
+    }
+
+    func type(_ character: String) {
+        let text = (layer == .letters && shift != .off) ? character.uppercased() : character
+        proxy?.insertText(text)
+        afterEdit()
+        if shift == .once { shift = .off }
+        // Like the system keyboard: an apostrophe on the numbers layer returns to letters.
+        if layer != .letters, character == "'" { layer = .letters }
+        updateSuggestions()
+    }
+
+    func space() {
+        guard let proxy else { return }
+        let before = proxy.documentContextBeforeInput
+        if settings.keyboardDoubleSpacePeriod, lastAutocorrect == nil,
+           KeyboardTextLogic.shouldInsertDoubleSpacePeriod(before: before) {
+            proxy.deleteBackward()
+            proxy.insertText(". ")
+            afterEdit()
+        } else {
+            let corrected = settings.keyboardAutoCorrect ? autocorrectCurrentWord() : nil
+            proxy.insertText(" ")
+            afterEdit()
+            lastAutocorrect = corrected
+        }
+        if layer != .letters { layer = .letters }
+        updateShift()
+        updateSuggestions()
+    }
+
+    func newline() {
+        proxy?.insertText("\n")
+        afterEdit()
+        updateShift()
+        updateSuggestions()
     }
 
     func deleteBackward() {
-        proxy?.deleteBackward()
+        guard let proxy else { return }
+        if let auto = lastAutocorrect {
+            // Backspace right after an autocorrection restores what you typed.
+            for _ in 0..<(auto.corrected.count + 1) { proxy.deleteBackward() }
+            proxy.insertText(auto.original)
+            lastAutocorrect = nil
+        } else {
+            proxy.deleteBackward()
+        }
         canUndo = false
+        updateShift()
+        updateSuggestions()
+    }
+
+    /// Deletes the previous word (used when delete is held for a while).
+    func deleteWordBackward() {
+        guard let proxy else { return }
+        let chars = Array(proxy.documentContextBeforeInput ?? "")
+        var i = chars.count
+        while i > 0, chars[i - 1].isWhitespace { i -= 1 } // trailing spaces…
+        while i > 0, !chars[i - 1].isWhitespace { i -= 1 } // …then the word
+        for _ in 0..<max(1, chars.count - i) { proxy.deleteBackward() }
+        lastAutocorrect = nil
+        updateShift()
+        updateSuggestions()
+    }
+
+    func moveCursor(by offset: Int) {
+        proxy?.adjustTextPosition(byCharacterOffset: offset)
+        lastAutocorrect = nil
+        updateSuggestions()
+    }
+
+    func shiftTapped() {
+        let now = Date()
+        if now.timeIntervalSince(lastShiftTap) < 0.3 {
+            shift = .locked
+        } else {
+            shift = shift == .off ? .once : .off
+        }
+        lastShiftTap = now
+    }
+
+    func toggleLayer() {
+        layer = layer == .letters ? .numbers : .letters
+    }
+
+    func toggleSymbols() {
+        layer = layer == .symbols ? .numbers : .symbols
+    }
+
+    func pick(_ suggestion: String) {
+        guard let proxy else { return }
+        for _ in 0..<currentWord.count { proxy.deleteBackward() }
+        proxy.insertText(suggestion + " ")
+        lastAutocorrect = nil
+        afterEdit()
+        updateShift()
+        updateSuggestions()
+    }
+
+    private func afterEdit() {
+        canUndo = false
+        if lastAutocorrect != nil { lastAutocorrect = nil }
+    }
+
+    private func updateShift() {
+        guard shift != .locked else { return }
+        guard settings.keyboardAutoCapitalize else { if shift == .once { shift = .off }; return }
+        let mode: KeyboardTextLogic.Capitalization
+        switch proxy?.autocapitalizationType ?? .sentences {
+        case .none: mode = .none
+        case .words: mode = .words
+        case .allCharacters: mode = .allCharacters
+        default: mode = .sentences
+        }
+        shift = KeyboardTextLogic.shouldCapitalize(before: proxy?.documentContextBeforeInput, mode: mode) ? .once : .off
+    }
+
+    private func updateSuggestions() {
+        let word = KeyboardTextLogic.currentWord(before: proxy?.documentContextBeforeInput)
+        currentWord = word
+        guard settings.keyboardSuggestions, !word.isEmpty, word.count < 40 else {
+            suggestions = []
+            return
+        }
+        let range = NSRange(location: 0, length: (word as NSString).length)
+        let misspelled = checker.rangeOfMisspelledWord(in: word, range: range, startingAt: 0, wrap: false,
+                                                       language: checkerLanguage).location != NSNotFound
+        let corrections = misspelled ? (checker.guesses(forWordRange: range, in: word, language: checkerLanguage) ?? []) : []
+        let completions = checker.completions(forPartialWordRange: range, in: word, language: checkerLanguage) ?? []
+        suggestions = KeyboardTextLogic.suggestions(for: word, vocabulary: protectedTerms, corrections: corrections,
+                                                    completions: completions)
+    }
+
+    /// Fixes an obvious typo in the word before the cursor. Returns what was changed, for undo.
+    private func autocorrectCurrentWord() -> (original: String, corrected: String)? {
+        guard let proxy else { return nil }
+        let word = KeyboardTextLogic.currentWord(before: proxy.documentContextBeforeInput)
+        guard word.count >= 3 else { return nil }
+        let range = NSRange(location: 0, length: (word as NSString).length)
+        guard checker.rangeOfMisspelledWord(in: word, range: range, startingAt: 0, wrap: false,
+                                            language: checkerLanguage).location != NSNotFound else { return nil }
+        let guesses = checker.guesses(forWordRange: range, in: word, language: checkerLanguage) ?? []
+        guard let fix = KeyboardTextLogic.autocorrection(for: word, guesses: guesses, protectedTerms: Set(protectedTerms)) else {
+            return nil
+        }
+        for _ in 0..<word.count { proxy.deleteBackward() }
+        proxy.insertText(fix)
+        return (word, fix)
+    }
+
+    private static func label(for type: UIReturnKeyType?) -> String? {
+        guard let type else { return nil }
+        switch type {
+        case .go: return "go"
+        case .google, .search, .yahoo: return "search"
+        case .join: return "join"
+        case .next: return "next"
+        case .route: return "route"
+        case .send: return "send"
+        case .done: return "done"
+        case .continue: return "continue"
+        case .emergencyCall: return "call"
+        default: return nil
+        }
     }
 
     // MARK: Haptics (only work with Full Access)

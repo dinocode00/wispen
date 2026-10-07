@@ -67,6 +67,17 @@ public struct WispenSettings: Codable, Equatable, Sendable {
     /// macOS: also capture system audio (Zoom/Meet/Teams) for meetings, labelled "Others".
     public var meetingCaptureSystemAudio: Bool = true
 
+    // iOS keyboard
+    public var keyboardAutoCorrect: Bool = true
+    public var keyboardAutoCapitalize: Bool = true
+    public var keyboardDoubleSpacePeriod: Bool = true
+    public var keyboardSuggestions: Bool = true
+    public var keyboardHaptics: Bool = true
+    public var keyboardSounds: Bool = false
+
+    /// iOS: show the flow session and meetings in the Dynamic Island and on the Lock Screen.
+    public var liveActivities: Bool = true
+
     public init() {}
 
     public var whisperModel: WhisperModelOption {
@@ -103,6 +114,13 @@ public struct WispenSettings: Codable, Equatable, Sendable {
         keepHistory = try c.decodeIfPresent(Bool.self, forKey: .keepHistory) ?? d.keepHistory
         historyLimit = try c.decodeIfPresent(Int.self, forKey: .historyLimit) ?? d.historyLimit
         meetingCaptureSystemAudio = try c.decodeIfPresent(Bool.self, forKey: .meetingCaptureSystemAudio) ?? d.meetingCaptureSystemAudio
+        keyboardAutoCorrect = try c.decodeIfPresent(Bool.self, forKey: .keyboardAutoCorrect) ?? d.keyboardAutoCorrect
+        keyboardAutoCapitalize = try c.decodeIfPresent(Bool.self, forKey: .keyboardAutoCapitalize) ?? d.keyboardAutoCapitalize
+        keyboardDoubleSpacePeriod = try c.decodeIfPresent(Bool.self, forKey: .keyboardDoubleSpacePeriod) ?? d.keyboardDoubleSpacePeriod
+        keyboardSuggestions = try c.decodeIfPresent(Bool.self, forKey: .keyboardSuggestions) ?? d.keyboardSuggestions
+        keyboardHaptics = try c.decodeIfPresent(Bool.self, forKey: .keyboardHaptics) ?? d.keyboardHaptics
+        keyboardSounds = try c.decodeIfPresent(Bool.self, forKey: .keyboardSounds) ?? d.keyboardSounds
+        liveActivities = try c.decodeIfPresent(Bool.self, forKey: .liveActivities) ?? d.liveActivities
     }
 
     private static let defaults = WispenSettings()

@@ -4,9 +4,17 @@ import WispenCore
 @main
 struct WispenApp: App {
     @StateObject private var app = AppModel.shared
-    @StateObject private var flow = FlowSessionController(app: AppModel.shared)
-    @StateObject private var recorder = MeetingRecorder(app: AppModel.shared)
+    @StateObject private var flow = FlowSessionController.shared
+    @StateObject private var recorder = MeetingRecorder.shared
     @Environment(\.scenePhase) private var scenePhase
+
+    init() {
+        // Buttons in the Dynamic Island / Lock Screen run these inside the app.
+        WispenActivityActions.endFlowSession = { FlowSessionController.shared.endSession() }
+        WispenActivityActions.stopMeeting = { Task { await MeetingRecorder.shared.stop() } }
+        LiveActivityController.shared.endStaleActivities()
+        LiveActivityController.shared.observe(MeetingRecorder.shared)
+    }
 
     var body: some Scene {
         WindowGroup {
@@ -39,6 +47,14 @@ struct WispenApp: App {
             Task { await recorder.summarize(meetingID: meeting.id) }
         }
     }
+}
+
+extension FlowSessionController {
+    static let shared = FlowSessionController(app: .shared)
+}
+
+extension MeetingRecorder {
+    static let shared = MeetingRecorder(app: .shared)
 }
 
 struct RootView: View {
