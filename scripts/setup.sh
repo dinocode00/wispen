@@ -1,0 +1,272 @@
+#!/bin/bash
+# Wispen one-command setup for your Mac + iPhone.
+#
+#   ./scripts/setup.sh              # everything: Mac app + iPhone app (+ offer auto-refresh)
+#   ./scripts/setup.sh --mac        # Mac app only
+#   ./scripts/setup.sh --iphone     # iPhone app only (also what the weekly refresh runs)
+#   ./scripts/setup.sh --auto-refresh-on | --auto-refresh-off
+#
+# Safe to re-run any time (e.g. after pulling updates).
+
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$ROOT"
+BUILD="$ROOT/.build-wispen"
+CONFIG="$ROOT/Config/Wispen.xcconfig"
+LOCAL_CONFIG="$ROOT/Config/Local.xcconfig"
+LOG="$BUILD/last-build.log"
+mkdir -p "$BUILD"
+
+bold() { printf "\n\033[1m%s\033[0m\n" "$*"; }
+ok() { printf "  \033[32m✓\033[0m %s\n" "$*"; }
+warn() { printf "  \033[33m!\033[0m %s\n" "$*"; }
+fail() { printf "  \033[31m✗\033[0m %s\n" "$*"; exit 1; }
+ask() { local reply; read -r -p "  $1 [Y/n] " reply </dev/tty || reply=y; [[ -z "$reply" || "$reply" =~ ^[Yy] ]]; }
+QUIET="${WISPEN_QUIET:-0}" # set by the auto-refresh job: never prompt
+
+DO_MAC=1
+DO_IPHONE=1
+case "${1:-}" in
+  --mac) DO_IPHONE=0 ;;
+  --iphone) DO_MAC=0 ;;
+  --auto-refresh-on) MODE=refresh-on ;;
+  --auto-refresh-off) MODE=refresh-off ;;
+  "") ;;
+  *) echo "Unknown option: $1"; exit 2 ;;
+esac
+
+PLIST="$HOME/Library/LaunchAgents/app.wispen.refresh.plist"
+if [[ "${MODE:-}" == refresh-off ]]; then
+  launchctl bootout "gui/$(id -u)" "$PLIST" 2>/dev/null || true
+  rm -f "$PLIST"
+  echo "Auto-refresh turned off."
+  exit 0
+fi
+
+install_refresh_job() {
+  mkdir -p "$(dirname "$PLIST")"
+  cat >"$PLIST" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>app.wispen.refresh</string>
+  <key>ProgramArguments</key>
+  <array><string>/bin/bash</string><string>$ROOT/scripts/refresh-iphone.sh</string></array>
+  <key>StartCalendarInterval</key><dict><key>Hour</key><integer>3</integer><key>Minute</key><integer>17</integer></dict>
+  <key>RunAtLoad</key><false/>
+  <key>StandardOutPath</key><string>$BUILD/refresh.log</string>
+  <key>StandardErrorPath</key><string>$BUILD/refresh.log</string>
+</dict>
+</plist>
+EOF
+  launchctl bootout "gui/$(id -u)" "$PLIST" 2>/dev/null || true
+  launchctl bootstrap "gui/$(id -u)" "$PLIST"
+  ok "Wispen will check every night and reinstall on your iPhone when it's within 2 days of expiring."
+}
+
+if [[ "${MODE:-}" == refresh-on ]]; then install_refresh_job; exit 0; fi
+
+# ───────────────────────────── 1. Xcode ─────────────────────────────
+bold "1/5  Checking Xcode"
+if ! XCODE_PATH=$(xcode-select -p 2>/dev/null) || [[ "$XCODE_PATH" == *CommandLineTools* ]]; then
+  if [[ -d /Applications/Xcode.app ]]; then
+    warn "Pointing the command line tools at Xcode (needs your Mac password)…"
+    sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+  else
+    warn "Xcode isn't installed. Opening the App Store page — install it (free), open it once, then re-run this script."
+    open "macappstore://apps.apple.com/app/xcode/id497799835"
+    exit 1
+  fi
+fi
+XCODE_VERSION=$(xcodebuild -version | head -1 | awk '{print $2}')
+if [[ "${XCODE_VERSION%%.*}" -lt 26 ]]; then
+  fail "Xcode $XCODE_VERSION found; Wispen needs Xcode 26 or newer (for iOS 26 / Apple Intelligence). Update it in the App Store."
+fi
+if ! xcodebuild -checkFirstLaunchStatus >/dev/null 2>&1; then
+  warn "Finishing Xcode's first-launch setup (needs your Mac password)…"
+  sudo xcodebuild -runFirstLaunch
+fi
+if [[ "$DO_IPHONE" == 1 ]] && ! xcodebuild -showsdks 2>/dev/null | grep -q iphoneos; then
+  warn "Downloading the iOS platform for Xcode (a few GB, one time)…"
+  xcodebuild -downloadPlatform iOS
+fi
+ok "Xcode $XCODE_VERSION"
+
+# ───────────────────────────── 2. Tools ─────────────────────────────
+bold "2/5  Checking tools"
+if ! command -v brew >/dev/null 2>&1; then
+  for b in /opt/homebrew/bin/brew /usr/local/bin/brew; do [[ -x $b ]] && eval "$($b shellenv)"; done
+fi
+if ! command -v brew >/dev/null 2>&1; then
+  [[ "$QUIET" == 1 ]] && fail "Homebrew missing."
+  warn "Installing Homebrew (https://brew.sh)…"
+  /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+  for b in /opt/homebrew/bin/brew /usr/local/bin/brew; do [[ -x $b ]] && eval "$($b shellenv)"; done
+fi
+command -v xcodegen >/dev/null 2>&1 || brew install xcodegen
+ok "Homebrew + XcodeGen"
+
+# ───────────────────────────── 3. Signing ─────────────────────────────
+bold "3/5  Signing"
+# Your free "Personal Team" ID: from Xcode's account settings, or the OU field of the
+# Apple Development certificate Xcode created when you signed in.
+find_team() {
+  /usr/bin/python3 - <<'PY'
+import plistlib, re, subprocess
+teams = []
+try:
+    prefs = plistlib.loads(subprocess.run(["defaults", "export", "com.apple.dt.Xcode", "-"],
+                                          capture_output=True, check=True).stdout)
+    for key in ("IDEProvisioningTeamByIdentifier", "IDEProvisioningTeams"):
+        for account_teams in (prefs.get(key) or {}).values():
+            for t in account_teams:
+                if t.get("teamID"):
+                    # Prefer the free personal team (that's what this setup is built around).
+                    teams.append((0 if t.get("isFreeProvisioningTeam") else 1, t["teamID"]))
+except Exception:
+    pass
+if not teams:
+    pems = subprocess.run(["security", "find-certificate", "-a", "-c", "Apple Development", "-p"],
+                          capture_output=True, text=True).stdout
+    for pem in re.findall(r"-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----", pems, re.S):
+        subject = subprocess.run(["openssl", "x509", "-noout", "-subject"], input=pem,
+                                 capture_output=True, text=True).stdout
+        m = re.search(r"OU\s*=\s*([A-Z0-9]{10})", subject)
+        if m:
+            teams.append((0, m.group(1)))
+if teams:
+    print(sorted(teams)[0][1])
+PY
+}
+TEAM_ID="$(grep -E '^WISPEN_TEAM_ID *=' "$LOCAL_CONFIG" 2>/dev/null | sed 's/.*= *//' || true)"
+if [[ -z "$TEAM_ID" ]]; then TEAM_ID="$(find_team || true)"; fi
+if [[ -z "$TEAM_ID" ]]; then
+  [[ "$QUIET" == 1 ]] && fail "No signing team."
+  warn "Xcode isn't signed in to your Apple ID yet. Opening Xcode…"
+  echo "     In Xcode: Settings (⌘,) › Accounts › + › Apple ID › sign in."
+  echo "     Then select your Apple ID › your (Personal Team) › Manage Certificates… › + › Apple Development."
+  open -a Xcode
+  read -r -p "  Press Return when that's done… " _ </dev/tty
+  TEAM_ID="$(find_team || true)"
+  [[ -n "$TEAM_ID" ]] || fail "Still no Apple Development certificate. Re-run the script after creating it in Xcode."
+fi
+
+PREFIX="$(grep -E '^WISPEN_BUNDLE_PREFIX *=' "$LOCAL_CONFIG" 2>/dev/null | sed 's/.*= *//' || true)"
+if [[ -z "$PREFIX" ]]; then
+  # Unique per person: based on your Mac username plus your team ID.
+  USER_PART="$(id -un | tr -cd 'a-zA-Z0-9' | tr 'A-Z' 'a-z')"
+  PREFIX="com.${USER_PART:-me}.$(echo "$TEAM_ID" | tr 'A-Z' 'a-z')"
+fi
+cat >"$LOCAL_CONFIG" <<EOF
+// Written by scripts/setup.sh — your personal signing settings (not committed).
+WISPEN_TEAM_ID = $TEAM_ID
+WISPEN_BUNDLE_PREFIX = $PREFIX
+EOF
+ok "Team $TEAM_ID · bundle IDs $PREFIX.wispen…"
+
+bold "     Generating the Xcode project"
+xcodegen --quiet
+ok "Wispen.xcodeproj"
+
+build() { # scheme, destination, extra args…
+  local scheme="$1" dest="$2"; shift 2
+  echo "     Building $scheme (first build downloads WhisperKit and takes a few minutes)…"
+  if ! xcodebuild build -project Wispen.xcodeproj -scheme "$scheme" -configuration Release \
+      -destination "$dest" -derivedDataPath "$BUILD/DerivedData" \
+      -allowProvisioningUpdates -skipMacroValidation -skipPackagePluginValidation "$@" >"$LOG" 2>&1; then
+    grep -E "error:" "$LOG" | head -20
+    fail "Build failed. Full log: $LOG"
+  fi
+}
+
+# ───────────────────────────── 4. Mac app ─────────────────────────────
+if [[ "$DO_MAC" == 1 ]]; then
+  bold "4/5  Mac app"
+  build WispenMac "generic/platform=macOS"
+  APP="$BUILD/DerivedData/Build/Products/Release/Wispen.app"
+  osascript -e 'quit app "Wispen"' >/dev/null 2>&1 || true
+  rm -rf /Applications/Wispen.app
+  ditto "$APP" /Applications/Wispen.app
+  osascript -e 'tell application "System Events" to make login item at end with properties {path:"/Applications/Wispen.app", hidden:true}' >/dev/null 2>&1 || true
+  open /Applications/Wispen.app
+  ok "Installed in /Applications, set to open at login, and running (waveform icon in the menu bar)."
+  if [[ "$QUIET" != 1 ]]; then
+    echo "     macOS will ask for Microphone access — click Allow."
+    echo "     Opening Accessibility settings: switch on “Wispen” so it can type for you."
+    open "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
+    echo "     Tip: if fn opens the emoji picker, set Keyboard › “Press 🌐 key to” › Do Nothing."
+  fi
+fi
+
+# ───────────────────────────── 5. iPhone app ─────────────────────────────
+if [[ "$DO_IPHONE" == 1 ]]; then
+  bold "5/5  iPhone app"
+  find_iphone() {
+    xcrun devicectl list devices --json-output "$BUILD/devices.json" >/dev/null 2>&1 || return 1
+    /usr/bin/python3 - "$BUILD/devices.json" <<'PY'
+import json, sys
+devices = json.load(open(sys.argv[1])).get("result", {}).get("devices", [])
+best = None
+for d in devices:
+    hw = d.get("hardwareProperties", {})
+    if hw.get("platform") != "iOS" or hw.get("reality") == "virtual":
+        continue
+    state = d.get("connectionProperties", {}).get("tunnelState", "")
+    cand = (state == "connected", hw.get("udid"), d.get("deviceProperties", {}).get("name", "iPhone"))
+    if best is None or cand > best:
+        best = cand
+if best:
+    print(f"{best[1]}\t{best[2]}")
+PY
+  }
+  DEVICE="$(find_iphone || true)"
+  while [[ -z "$DEVICE" ]]; do
+    [[ "$QUIET" == 1 ]] && { echo "iPhone not reachable; will try again tomorrow."; exit 0; }
+    warn "No iPhone found. Plug it in with a cable, unlock it, and tap “Trust This Computer”."
+    read -r -p "  Press Return to look again (or Ctrl-C to stop)… " _ </dev/tty
+    DEVICE="$(find_iphone || true)"
+  done
+  UDID="${DEVICE%%$'\t'*}"
+  NAME="${DEVICE#*$'\t'}"
+  ok "Found $NAME"
+
+  build Wispen "id=$UDID"
+  IPA_APP="$BUILD/DerivedData/Build/Products/Release-iphoneos/Wispen.app"
+  if ! xcrun devicectl device install app --device "$UDID" "$IPA_APP" >"$BUILD/install.log" 2>&1; then
+    if grep -qi "developer mode" "$BUILD/install.log"; then
+      fail "Turn on Developer Mode on your iPhone: Settings › Privacy & Security › Developer Mode (it restarts), then re-run."
+    fi
+    tail -5 "$BUILD/install.log"
+    fail "Install failed (full log: $BUILD/install.log)."
+  fi
+  date +%s >"$BUILD/iphone-installed-at"
+  ok "Installed on $NAME"
+  BUNDLE_ID="$PREFIX.wispen"
+  if ! xcrun devicectl device process launch --device "$UDID" "$BUNDLE_ID" >/dev/null 2>&1; then
+    [[ "$QUIET" == 1 ]] || warn "First install: on the iPhone open Settings › General › VPN & Device Management › your Apple ID › Trust. Then open Wispen."
+  else
+    ok "Wispen is open on your iPhone."
+  fi
+
+  if [[ "$QUIET" != 1 ]]; then
+    cat <<'EOF'
+
+     On your iPhone (one time):
+       1. In Wispen, let it download the speech model (use Wi-Fi) and allow the microphone.
+       2. Wispen › Flow tab › Setup › “Add the Wispen keyboard” › Open
+          → Keyboards › turn on Wispen and Allow Full Access.
+       3. Make sure Apple Intelligence is on (Settings › Apple Intelligence & Siri).
+EOF
+    if [[ ! -f "$PLIST" ]]; then
+      echo
+      echo "     Free Apple IDs make iPhone apps expire after 7 days."
+      if ask "Reinstall Wispen automatically every week (needs this Mac on and the iPhone on the same Wi-Fi)?"; then
+        install_refresh_job
+      fi
+    fi
+  fi
+fi
+
+bold "Done 🎉"
