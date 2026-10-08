@@ -56,7 +56,7 @@ install_refresh_job() {
   <key>Label</key><string>app.wispen.refresh</string>
   <key>ProgramArguments</key>
   <array><string>/bin/bash</string><string>$ROOT/scripts/refresh-iphone.sh</string></array>
-  <key>StartCalendarInterval</key><dict><key>Hour</key><integer>3</integer><key>Minute</key><integer>17</integer></dict>
+  <key>StartInterval</key><integer>3600</integer>
   <key>RunAtLoad</key><false/>
   <key>StandardOutPath</key><string>$BUILD/refresh.log</string>
   <key>StandardErrorPath</key><string>$BUILD/refresh.log</string>
@@ -65,7 +65,7 @@ install_refresh_job() {
 EOF
   launchctl bootout "gui/$(id -u)" "$PLIST" 2>/dev/null || true
   launchctl bootstrap "gui/$(id -u)" "$PLIST"
-  ok "Wispen will check every night and reinstall on your iPhone when it's within 2 days of expiring."
+  ok "Every hour, your Mac installs new Wispen updates on your iPhone (and Mac), and renews the iPhone app before it expires."
 }
 
 if [[ "${MODE:-}" == refresh-on ]]; then install_refresh_job; exit 0; fi
@@ -74,6 +74,7 @@ if [[ "${MODE:-}" == refresh-on ]]; then install_refresh_job; exit 0; fi
 bold "1/5  Checking Xcode"
 if ! XCODE_PATH=$(xcode-select -p 2>/dev/null) || [[ "$XCODE_PATH" == *CommandLineTools* ]]; then
   if [[ -d /Applications/Xcode.app ]]; then
+    [[ "$QUIET" == 1 ]] && fail "Xcode command line tools need setting up; run scripts/setup.sh once in Terminal."
     warn "Pointing the command line tools at Xcode (needs your Mac password)…"
     sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
   else
@@ -88,10 +89,12 @@ if [[ "${XCODE_VERSION%%.*}" -lt 26 ]]; then
   fail "Xcode $XCODE_VERSION found; Wispen needs Xcode 26 or newer (for iOS 26 / Apple Intelligence). Update it in the App Store."
 fi
 if ! xcodebuild -checkFirstLaunchStatus >/dev/null 2>&1; then
+  [[ "$QUIET" == 1 ]] && fail "Xcode was updated and needs a one-time setup; run scripts/setup.sh once in Terminal."
   warn "Finishing Xcode's first-launch setup (needs your Mac password)…"
   sudo xcodebuild -runFirstLaunch
 fi
 if [[ "$DO_IPHONE" == 1 ]] && ! xcodebuild -showsdks 2>/dev/null | grep iphoneos >/dev/null; then
+  [[ "$QUIET" == 1 ]] && fail "Xcode is missing the iOS platform; run scripts/setup.sh once in Terminal."
   warn "Downloading the iOS platform for Xcode (a few GB, one time)…"
   xcodebuild -downloadPlatform iOS
 fi
@@ -274,6 +277,7 @@ PY
     fail "Install failed (full log: $BUILD/install.log)."
   fi
   date +%s >"$BUILD/iphone-installed-at"
+  git -C "$ROOT" rev-parse HEAD >"$BUILD/iphone-installed-commit" 2>/dev/null || true
   ok "Installed on $NAME"
   BUNDLE_ID="$PREFIX.wispen"
   if ! xcrun devicectl device process launch --device "$UDID" "$BUNDLE_ID" >/dev/null 2>&1; then
@@ -294,7 +298,7 @@ EOF
     if [[ ! -f "$PLIST" ]]; then
       echo
       echo "     Free Apple IDs make iPhone apps expire after 7 days."
-      if ask "Reinstall Wispen automatically every week (needs this Mac on and the iPhone on the same Wi-Fi)?"; then
+      if ask "Install Wispen updates automatically and renew it weekly (needs this Mac on and the iPhone on the same Wi-Fi)?"; then
         install_refresh_job
       fi
     fi

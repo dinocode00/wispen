@@ -1,16 +1,40 @@
 #!/bin/bash
-# Run nightly by launchd (see setup.sh --auto-refresh-on). Reinstalls Wispen on the iPhone when the
-# free-account signature is within 2 days of its 7-day expiry. Your data on the phone is kept.
+# Run every hour by launchd (see `setup.sh --auto-refresh-on`). It:
+#   • installs new Wispen updates (new commits on this branch) on the iPhone and the Mac, and
+#   • renews the iPhone app before the free-account 7-day signature expires.
+# Your data on both devices is kept. If the iPhone isn't reachable, it simply tries again next hour.
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-STAMP="$ROOT/.build-wispen/iphone-installed-at"
+BUILD="$ROOT/.build-wispen"
 export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+cd "$ROOT" || exit 0
 
-installed=$(cat "$STAMP" 2>/dev/null || echo 0)
-age_days=$(( ($(date +%s) - installed) / 86400 ))
-echo "$(date): last install $age_days day(s) ago"
-if (( age_days < 5 )); then
-  echo "Nothing to do."
+notify() { osascript -e "display notification \"$1\" with title \"Wispen\"" >/dev/null 2>&1 || true; }
+
+# 1. Pull updates (fast-forward only, so local edits are never overwritten).
+branch="$(git rev-parse --abbrev-ref HEAD)"
+before="$(git rev-parse HEAD)"
+git fetch -q origin "$branch" 2>/dev/null && git merge -q --ff-only "origin/$branch" 2>/dev/null
+now="$(git rev-parse HEAD)"
+if [[ "$now" != "$before" ]]; then
+  echo "$(date): pulled update $(git log -1 --format='%h %s')"
+  # Mac app: rebuild and reinstall quietly.
+  if WISPEN_QUIET=1 /bin/bash "$ROOT/scripts/setup.sh" --mac; then
+    notify "Mac app updated: $(git log -1 --format='%s' | cut -c1-80)"
+  fi
+fi
+
+# 2. iPhone: install when it's behind, or when the signature is about to expire.
+installed_commit="$(cat "$BUILD/iphone-installed-commit" 2>/dev/null || true)"
+installed_at="$(cat "$BUILD/iphone-installed-at" 2>/dev/null || echo 0)"
+age_days=$(( ($(date +%s) - installed_at) / 86400 ))
+if [[ "$installed_commit" == "$now" ]] && (( age_days < 5 )); then
+  echo "$(date): up to date (installed $age_days day(s) ago)."
   exit 0
 fi
-WISPEN_QUIET=1 /bin/bash "$ROOT/scripts/setup.sh" --iphone
+echo "$(date): installing on iPhone (behind: $([[ "$installed_commit" != "$now" ]] && echo yes || echo no), age: $age_days d)"
+if WISPEN_QUIET=1 /bin/bash "$ROOT/scripts/setup.sh" --iphone && [[ "$(cat "$BUILD/iphone-installed-commit" 2>/dev/null)" == "$now" ]]; then
+  if [[ "$installed_commit" != "$now" ]]; then
+    notify "Updated on your iPhone: $(git log -1 --format='%s' | cut -c1-80)"
+  fi
+fi
