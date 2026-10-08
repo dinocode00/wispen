@@ -176,6 +176,9 @@ build() { # scheme, destination, extra args…
   if ! xcodebuild build -project Wispen.xcodeproj -scheme "$scheme" -configuration Release \
       -destination "$dest" -derivedDataPath "$BUILD/DerivedData" \
       -allowProvisioningUpdates -skipMacroValidation -skipPackagePluginValidation "$@" >"$LOG" 2>&1; then
+    if grep -q "Developer Mode disabled" "$LOG"; then
+      fail "Developer Mode isn't on yet. Turn it on (Settings › Privacy & Security), tap “Turn On” after the restart, then run: $0 --iphone"
+    fi
     grep -E "error:" "$LOG" | head -20
     fail "Build failed. Full log: $LOG"
   fi
@@ -214,11 +217,13 @@ for d in devices:
     if hw.get("platform") != "iOS" or hw.get("reality") == "virtual":
         continue
     state = d.get("connectionProperties", {}).get("tunnelState", "")
-    cand = (state == "connected", hw.get("udid"), d.get("deviceProperties", {}).get("name", "iPhone"))
+    props = d.get("deviceProperties", {})
+    cand = (state == "connected", hw.get("udid"), props.get("name", "iPhone"),
+            props.get("developerModeStatus", "unknown"))
     if best is None or cand > best:
         best = cand
 if best:
-    print(f"{best[1]}\t{best[2]}")
+    print(f"{best[1]}\t{best[2]}\t{best[3]}")
 PY
   }
   DEVICE="$(find_iphone || true)"
@@ -228,9 +233,17 @@ PY
     read -r -p "  Press Return to look again (or Ctrl-C to stop)… " _ </dev/tty
     DEVICE="$(find_iphone || true)"
   done
-  UDID="${DEVICE%%$'\t'*}"
-  NAME="${DEVICE#*$'\t'}"
+  IFS=$'\t' read -r UDID NAME DEV_MODE <<<"$DEVICE"
   ok "Found $NAME"
+  while [[ "$DEV_MODE" == "disabled" ]]; do
+    [[ "$QUIET" == 1 ]] && { echo "Developer Mode is off on the iPhone."; exit 0; }
+    warn "Developer Mode is off on $NAME."
+    echo "     On the iPhone: Settings › Privacy & Security › Developer Mode › On › Restart."
+    echo "     After it restarts, unlock it and tap “Turn On” in the alert (then enter your passcode)."
+    read -r -p "  Press Return when that's done… " _ </dev/tty
+    DEVICE="$(find_iphone || true)"
+    IFS=$'\t' read -r UDID NAME DEV_MODE <<<"$DEVICE"
+  done
 
   build Wispen "id=$UDID"
   IPA_APP="$BUILD/DerivedData/Build/Products/Release-iphoneos/Wispen.app"
