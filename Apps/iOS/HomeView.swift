@@ -69,13 +69,13 @@ struct HomeView: View {
                   "Swipe down from the top-right › + › Add a Control › search “Wispen” › Start Wispen.")
             howTo("button.horizontal.top.press", "Action Button",
                   "Settings › Action Button › Controls › Start Wispen.")
-            howTo("wand.and.rays", "Automatically",
-                  "Shortcuts › Automation › + › App › choose Messages (and any others) › Is Opened › Run Immediately › Next › Start Wispen.")
+            howTo("wand.and.rays", "Automatically, only while you're texting (recommended)",
+                  "Shortcuts › Automation › + › App › choose Messages (and any others) › tick “Is Opened” › Run Immediately › Next › Start Wispen. Then make a second one with “Is Closed” › End Wispen. The mic is only on while you're in those apps.")
             howTo("mic", "Siri", "“Hey Siri, start Wispen.”")
         } header: {
             Text("Start without opening Wispen")
         } footer: {
-            Text("iOS only lets an app turn on the microphone from the screen — that's why the keyboard sends you here the first time. These start the session in the background instead, so the keyboard mic just works.")
+            Text("iOS only lets an app turn on the microphone from the screen — that's why the keyboard sends you here when no session is running. These start a session in the background instead, so the keyboard mic just works. Wispen only records while you're dictating; the orange dot shows the session is ready.")
         }
     }
 
