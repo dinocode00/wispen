@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(CoreGraphics)
+import CoreGraphics
+#endif
 
 /// Decides when each key press is typed, so fast typing never drops a letter.
 ///
