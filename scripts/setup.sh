@@ -9,6 +9,8 @@
 # Safe to re-run any time (e.g. after pulling updates).
 
 set -euo pipefail
+# Never stop silently: say where and why.
+trap 'code=$?; printf "\n  \033[31m✗\033[0m setup.sh stopped at line %s (exit %s). Paste this output to Claude.\n" "$LINENO" "$code"' ERR
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
@@ -80,7 +82,8 @@ if ! XCODE_PATH=$(xcode-select -p 2>/dev/null) || [[ "$XCODE_PATH" == *CommandLi
     exit 1
   fi
 fi
-XCODE_VERSION=$(xcodebuild -version | head -1 | awk '{print $2}')
+# (awk reads all input; `| head` can kill xcodebuild mid-write and abort the script under pipefail)
+XCODE_VERSION=$(xcodebuild -version 2>/dev/null | awk 'NR==1{print $2}')
 if [[ "${XCODE_VERSION%%.*}" -lt 26 ]]; then
   fail "Xcode $XCODE_VERSION found; Wispen needs Xcode 26 or newer (for iOS 26 / Apple Intelligence). Update it in the App Store."
 fi
@@ -88,7 +91,7 @@ if ! xcodebuild -checkFirstLaunchStatus >/dev/null 2>&1; then
   warn "Finishing Xcode's first-launch setup (needs your Mac password)…"
   sudo xcodebuild -runFirstLaunch
 fi
-if [[ "$DO_IPHONE" == 1 ]] && ! xcodebuild -showsdks 2>/dev/null | grep -q iphoneos; then
+if [[ "$DO_IPHONE" == 1 ]] && ! xcodebuild -showsdks 2>/dev/null | grep iphoneos >/dev/null; then
   warn "Downloading the iOS platform for Xcode (a few GB, one time)…"
   xcodebuild -downloadPlatform iOS
 fi
@@ -179,7 +182,7 @@ build() { # scheme, destination, extra args…
     if grep -q "Developer Mode disabled" "$LOG"; then
       fail "Developer Mode isn't on yet. Turn it on (Settings › Privacy & Security), tap “Turn On” after the restart, then run: $0 --iphone"
     fi
-    grep -E "error:" "$LOG" | head -20
+    grep -E "error:" "$LOG" | sed -n '1,20p' || true
     fail "Build failed. Full log: $LOG"
   fi
 }
