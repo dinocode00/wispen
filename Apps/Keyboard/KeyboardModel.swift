@@ -32,6 +32,9 @@ final class KeyboardModel: ObservableObject {
 
     let styles: [DictationStyle]
     let settings: WispenSettings
+    /// Look and touch effects; changes in the Wispen app apply right away.
+    @Published private(set) var theme: KeyboardTheme
+    let effects = KeyEffectsEngine()
     private let store = WispenStore()
     private weak var controller: KeyboardViewController?
     private var poll: Timer?
@@ -55,12 +58,15 @@ final class KeyboardModel: ObservableObject {
         styles = store.allStyles()
         protectedTerms = store.loadDictionary().map(\.term)
         settings = store.loadSettings()
+        theme = settings.keyboardTheme
         styleID = UserDefaults.standard.string(forKey: "keyboardStyleID") ?? settings.defaultStyleID
         // Your dictionary words are never "misspelled".
         for term in protectedTerms where !UITextChecker.hasLearnedWord(term) { UITextChecker.learnWord(term) }
 
         DarwinNotifier.shared.observe(.state) { [weak self] in Task { @MainActor in self?.refreshState() } }
         DarwinNotifier.shared.observe(.result) { [weak self] in Task { @MainActor in self?.consumeResult() } }
+        DarwinNotifier.shared.observe(.theme) { [weak self] in Task { @MainActor in self?.reloadTheme() } }
+        effects.apply(theme)
     }
 
     var waitingForApp: Bool {
@@ -86,6 +92,7 @@ final class KeyboardModel: ObservableObject {
 
     func appeared() {
         isVisible = true
+        reloadTheme()
         // Lets the Wispen app show "keyboard set up ✓" (this write only works with Full Access).
         try? FlowIPC.keyboardStatusFile.save(KeyboardStatus(hasFullAccess: hasFullAccess))
         if !hasFullAccess {
@@ -103,6 +110,12 @@ final class KeyboardModel: ObservableObject {
                 if self.state.phase != .recording { self.consumeResult() }
             }
         }
+    }
+
+    func reloadTheme() {
+        let t = store.loadSettings().keyboardTheme
+        if t != theme { theme = t }
+        effects.apply(t)
     }
 
     func disappeared() {

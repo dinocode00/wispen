@@ -93,5 +93,12 @@ struct GlobeKey: UIViewRepresentable {
         return button
     }
 
-    func updateUIView(_ uiView: UIButton, context: Context) {}
+    func updateUIView(_ uiView: UIButton, context: Context) {
+        let palette = context.environment.keyPalette
+        uiView.tintColor = UIColor(palette.text)
+        uiView.backgroundColor = palette.softShadow ? UIColor.secondarySystemBackground : UIColor(palette.mod)
+        uiView.layer.cornerRadius = palette.radius
+        uiView.layer.borderColor = palette.border.map { UIColor($0).cgColor }
+        uiView.layer.borderWidth = palette.border == nil ? 0 : (palette.weight == .thin ? 0.75 : 1)
+    }
 }

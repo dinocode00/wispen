@@ -8,19 +8,34 @@ struct KeyboardView: View {
     let globeKey: GlobeKey
 
     var body: some View {
-        VStack(spacing: 0) {
-            Toolbar(model: model)
-                .frame(height: 44)
-            Group {
-                if model.showsVoicePanel {
-                    VoicePanel(model: model)
-                } else if model.showStyles {
-                    StylesPanel(model: model)
-                } else {
-                    KeysView(model: model, globeKey: globeKey)
+        let palette = KeyPalette.make(model.theme)
+        ZStack(alignment: .topTrailing) {
+            ThemeBackground(palette: palette, effects: model.effects)
+            VStack(spacing: 0) {
+                Toolbar(model: model)
+                    .frame(height: 44)
+                Group {
+                    if model.showsVoicePanel {
+                        VoicePanel(model: model)
+                    } else if model.showStyles {
+                        StylesPanel(model: model)
+                    } else {
+                        KeysView(model: model, globeKey: globeKey)
+                    }
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            EffectsLayer(effects: model.effects)
+                .allowsHitTesting(false)
+            ComboBadge(effects: model.effects)
+                .padding(.top, 48)
+                .padding(.trailing, 10)
+                .allowsHitTesting(false)
+        }
+        .coordinateSpace(name: KeyEffectsEngine.space)
+        .environment(\.keyPalette, palette)
+        .onChange(of: model.isRecording) {
+            if model.isRecording { model.effects.startAmbient() } else { model.effects.stopAmbient() }
         }
     }
 }
@@ -29,6 +44,7 @@ struct KeyboardView: View {
 
 private struct Toolbar: View {
     @ObservedObject var model: KeyboardModel
+    @Environment(\.keyPalette) private var palette
 
     var body: some View {
         HStack(spacing: 6) {
@@ -36,7 +52,7 @@ private struct Toolbar: View {
                 Text(model.style.emoji)
                     .font(.system(size: 18))
                     .frame(width: 38, height: 34)
-                    .background(model.showStyles ? KeyColors.accent.opacity(0.25) : Color.clear, in: RoundedRectangle(cornerRadius: 8))
+                    .background(model.showStyles ? palette.accent.opacity(0.25) : Color.clear, in: RoundedRectangle(cornerRadius: 8))
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Style: \(model.style.name)")
@@ -47,7 +63,7 @@ private struct Toolbar: View {
             Button { model.commandTapped() } label: {
                 Image(systemName: "wand.and.stars")
                     .font(.system(size: 17, weight: .medium))
-                    .foregroundStyle(model.hasSelection ? KeyColors.accent : Color.primary)
+                    .foregroundStyle(model.hasSelection ? palette.accent : palette.text)
                     .frame(width: 38, height: 34)
             }
             .buttonStyle(.plain)
@@ -55,10 +71,10 @@ private struct Toolbar: View {
 
             Button { model.micTapped() } label: {
                 ZStack {
-                    Circle().fill(model.isRecording ? Color.red : KeyColors.accent).frame(width: 36, height: 36)
+                    Circle().fill(model.isRecording ? Color.red : palette.accent).frame(width: 36, height: 36)
                     Image(systemName: model.isRecording ? "stop.fill" : "mic.fill")
                         .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(model.isRecording ? .white : palette.accentText)
                 }
             }
             .buttonStyle(.plain)
@@ -73,7 +89,7 @@ private struct Toolbar: View {
             Button { model.insertPending() } label: {
                 Label("Insert “\(pending.prefix(28))\(pending.count > 28 ? "…" : "")”", systemImage: "text.insert")
                     .font(.footnote.weight(.semibold))
-                    .foregroundStyle(KeyColors.accent)
+                    .foregroundStyle(palette.accent)
                     .lineLimit(1)
             }
             .buttonStyle(.plain)
@@ -87,7 +103,7 @@ private struct Toolbar: View {
             Button { model.undo() } label: {
                 Label("Undo dictation", systemImage: "arrow.uturn.backward")
                     .font(.footnote.weight(.medium))
-                    .foregroundStyle(Color.primary)
+                    .foregroundStyle(palette.text)
             }
             .buttonStyle(.plain)
         } else if !model.suggestions.isEmpty {
@@ -101,7 +117,7 @@ private struct Toolbar: View {
         } else {
             Text(model.hasSelection ? "Tap ✨ or 🎤 to edit the selection by voice" : "\(model.style.name) · tap 🎤 to dictate")
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(palette.text.opacity(0.6))
                 .lineLimit(1)
         }
     }
@@ -112,7 +128,7 @@ private struct Toolbar: View {
                 .font(.system(size: 16))
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
-                .foregroundStyle(Color.primary)
+                .foregroundStyle(palette.text)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .contentShape(Rectangle())
         }
@@ -124,12 +140,13 @@ private struct Toolbar: View {
 
 private struct VoicePanel: View {
     @ObservedObject var model: KeyboardModel
+    @Environment(\.keyPalette) private var palette
 
     var body: some View {
         VStack(spacing: 10) {
             Text(statusText)
                 .font(.callout)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(palette.text.opacity(0.7))
                 .multilineTextAlignment(.center)
                 .padding(.horizontal)
             HStack {
@@ -139,8 +156,8 @@ private struct VoicePanel: View {
                         Text("Cancel").font(.caption2)
                     }
                     .frame(width: 70, height: 56)
-                    .background(KeyColors.function.opacity(0.6), in: RoundedRectangle(cornerRadius: 10))
-                    .foregroundStyle(Color.primary)
+                    .background(palette.mod.opacity(0.6), in: RoundedRectangle(cornerRadius: 10))
+                    .foregroundStyle(palette.text)
                 }
                 .buttonStyle(.plain)
                 .opacity(model.isRecording || model.waitingForApp ? 1 : 0)
@@ -150,13 +167,13 @@ private struct VoicePanel: View {
                 Button { model.micTapped() } label: {
                     ZStack {
                         Circle()
-                            .fill(model.isRecording ? Color.red : KeyColors.accent)
+                            .fill(model.isRecording ? Color.red : palette.accent)
                             .frame(width: 96, height: 96)
-                            .shadow(color: (model.isRecording ? Color.red : KeyColors.accent).opacity(0.35), radius: 10, y: 4)
+                            .shadow(color: (model.isRecording ? Color.red : palette.accent).opacity(0.35), radius: 10, y: 4)
                         if model.isRecording {
                             PulsingBars()
                         } else {
-                            ProgressView().tint(.white).scaleEffect(1.4)
+                            ProgressView().tint(palette.accentText).scaleEffect(1.4)
                         }
                     }
                 }
@@ -170,7 +187,7 @@ private struct VoicePanel: View {
                     Text(model.state.mode == .command ? "Command" : model.style.name).font(.caption2)
                 }
                 .frame(width: 70, height: 56)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(palette.text.opacity(0.6))
             }
             .padding(.horizontal, 20)
         }
@@ -191,6 +208,7 @@ private struct VoicePanel: View {
 
 private struct StylesPanel: View {
     @ObservedObject var model: KeyboardModel
+    @Environment(\.keyPalette) private var palette
 
     var body: some View {
         ScrollView {
@@ -202,29 +220,14 @@ private struct StylesPanel: View {
                             Text(style.name).font(.footnote.weight(.medium)).lineLimit(1)
                         }
                         .frame(maxWidth: .infinity, minHeight: 58)
-                        .background(model.styleID == style.id ? KeyColors.accent.opacity(0.25) : KeyColors.character,
+                        .background(model.styleID == style.id ? palette.accent.opacity(0.25) : palette.key,
                                     in: RoundedRectangle(cornerRadius: 10))
-                        .foregroundStyle(model.styleID == style.id ? KeyColors.accent : Color.primary)
+                        .foregroundStyle(model.styleID == style.id ? palette.accent : palette.text)
                     }
                     .buttonStyle(.plain)
                 }
             }
             .padding(10)
-        }
-    }
-}
-
-/// Animated bars shown while recording (the keyboard doesn't get live audio levels).
-struct PulsingBars: View {
-    var body: some View {
-        TimelineView(.animation) { context in
-            let t = context.date.timeIntervalSinceReferenceDate
-            HStack(spacing: 4) {
-                ForEach(0..<5, id: \.self) { i in
-                    let h = 10 + 22 * abs(sin(t * 3 + Double(i) * 0.9))
-                    Capsule().fill(.white).frame(width: 5, height: h)
-                }
-            }
         }
     }
 }

@@ -15,6 +15,8 @@ public enum FlowIPC {
         case request = "app.wispen.flow.request"
         case state = "app.wispen.flow.state"
         case result = "app.wispen.flow.result"
+        /// The keyboard look changed in the app.
+        case theme = "app.wispen.keyboard.theme"
     }
 
     public static var requestFile: JSONFile<FlowRequest> { JSONFile(name: "request.json", in: WispenPaths.ipc) }
