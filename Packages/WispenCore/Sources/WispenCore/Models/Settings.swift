@@ -173,6 +173,11 @@ public enum AppStyleRules {
         "com.superhuman.electron": DictationStyle.formal.id,
         "com.apple.Notes": DictationStyle.notes.id,
         "md.obsidian": DictationStyle.notes.id,
+        "com.openai.chat": DictationStyle.aiPrompt.id,
+        "com.anthropic.claudefordesktop": DictationStyle.aiPrompt.id,
+        "ai.perplexity.mac": DictationStyle.aiPrompt.id,
+        "com.todesktop.230313mzl4w4u92": DictationStyle.aiPrompt.id, // Cursor
+        "com.exafunction.windsurf": DictationStyle.aiPrompt.id,
         "notion.id": DictationStyle.notes.id,
     ]
 

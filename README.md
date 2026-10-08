@@ -18,8 +18,11 @@ Everything runs **on your devices** and costs nothing:
 - **Smart cleanup**: removes *um/uh/like*, stutters and false starts, fixes punctuation and grammar, keeps your voice.
 - **Self-corrections**: “let's meet at 5, no wait, 6” → “Let's meet at 6.” · “…scratch that” deletes the sentence.
 - **Lists**: “first … second … third …” becomes a numbered list. “New line”, “new paragraph”, “bullet point” work.
-- **Styles**: Polished, Formal, Casual, Texting, Notes, Verbatim + your own (“LinkedIn”, “Pirate”…).
-  On Mac, the style follows the app you're in (Messages → Texting, Mail → Formal, Slack → Casual; customizable).
+- **Styles**: Polished, Formal, Casual, Texting, Notes, **AI Prompt**, Verbatim + your own (“LinkedIn”, “Pirate”…).
+  *AI Prompt* turns a rambling request to ChatGPT/Claude/Cursor into a structured prompt (Goal, Context,
+  Requirements, Steps, Output, Questions) without dropping any detail — and never answers it for you.
+  On Mac, the style follows the app you're in (Messages → Texting, Mail → Formal, Slack → Casual,
+  ChatGPT/Claude/Cursor → AI Prompt; customizable).
 - **Dictionary**: names and jargon spelled right every time (“Siobhan”, “Kubernetes”), including what it
   *mis-hears* (“why spin” → “Wispen”). Also biases Whisper toward those words.
 - **Snippets**: say “my email” → `you@example.com`; “my calendar link” → the link. Expanded byte-for-byte.

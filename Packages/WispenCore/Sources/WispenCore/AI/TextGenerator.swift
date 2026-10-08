@@ -72,6 +72,21 @@ public enum RewriteGuard {
         // Cleanup removes fillers and corrections, but should never balloon or collapse.
         if Double(outWords) > Double(inWords) * 1.5 + 8 { return false }
         if inWords >= 12 && Double(outWords) < Double(inWords) * 0.3 { return false }
+        // An edit reuses the speaker's words; an *answer* to their question doesn't.
+        if overlap(input: lowerIn, output: lowerOut) < 0.5 { return false }
         return true
+    }
+
+    /// Share of the output's content words (4+ letters, excluding section labels) that the speaker said.
+    static func overlap(input: String, output: String) -> Double {
+        func words(_ s: String) -> [String] {
+            s.split(whereSeparator: { !$0.isLetter && !$0.isNumber }).map(String.init).filter { $0.count >= 4 }
+        }
+        let said = Set(words(input))
+        let written = words(output).filter { !Prompts.promptSectionLabels.contains($0) }
+        guard written.count >= 6 else { return 1 } // too short to judge
+        // Allow simple inflections ("meet" → "meeting").
+        let reused = written.filter { w in said.contains(w) || said.contains { $0.hasPrefix(w.prefix(4)) } }
+        return Double(reused.count) / Double(written.count)
     }
 }
