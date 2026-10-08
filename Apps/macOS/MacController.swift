@@ -33,6 +33,7 @@ final class MacController: ObservableObject {
     }
 
     func start() {
+        SpeakerReviewStore.purgeExpired()
         hotkey.onEvent = { [weak self] event in self?.handle(event) }
         hotkey.start()
         overlay.attach(engine: engine, controller: self)

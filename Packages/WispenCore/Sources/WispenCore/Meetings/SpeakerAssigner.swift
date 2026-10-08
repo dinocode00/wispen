@@ -1,7 +1,7 @@
 import Foundation
 
 /// A word (or short phrase) with its time in the meeting, from Whisper's word timestamps.
-public struct TimedText: Sendable, Equatable {
+public struct TimedText: Codable, Sendable, Equatable {
     public var text: String
     public var start: Double
     public var end: Double
@@ -47,6 +47,8 @@ public enum SpeakerAssigner {
             for i in ids.indices where ids[i] == nil { ids[i] = firstKnown }
         }
 
+        ids = smoothIslands(ids, words: words)
+
         // 2. Number speakers by first appearance: Speaker 1 talks first.
         var names: [Int: String] = [:]
         for id in ids.compactMap({ $0 }) where names[id] == nil {
@@ -72,6 +74,30 @@ public enum SpeakerAssigner {
         }
         flush()
         return segments
+    }
+
+    /// A few words attributed to someone else in the middle of one person's sentence are almost
+    /// always a diarization glitch (overlap, a cough): give them back to the surrounding speaker.
+    static func smoothIslands(_ ids: [Int?], words: [TimedText], maxWords: Int = 3, maxSeconds: Double = 1.2) -> [Int?] {
+        var ids = ids
+        var i = 0
+        while i < ids.count {
+            var j = i
+            while j + 1 < ids.count, ids[j + 1] == ids[i] { j += 1 }
+            // Run i...j has one speaker; check whether it's a short island between the same speaker.
+            // A real reply starts after a pause; a glitch sits inside continuous speech.
+            if i > 0, j + 1 < ids.count, ids[i - 1] == ids[j + 1], ids[i - 1] != ids[i],
+               j - i + 1 <= maxWords, words[j].end - words[i].start <= maxSeconds,
+               words[i].start - words[i - 1].end < 0.25, words[j + 1].start - words[j].end < 0.25 {
+                for k in i...j { ids[k] = ids[i - 1] }
+                // Re-scan from the merged run's start.
+                i = max(0, i - 1)
+                while i > 0, ids[i - 1] == ids[i] { i -= 1 }
+                continue
+            }
+            i = j + 1
+        }
+        return ids
     }
 
     /// The speaker overlapping a word the most; or the nearest turn within a second.
