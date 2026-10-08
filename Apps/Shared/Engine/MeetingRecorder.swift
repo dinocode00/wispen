@@ -61,6 +61,9 @@ final class MeetingRecorder: ObservableObject {
     private var startedAt = Date()
     private var lastSave = Date()
     private var summarizing: Set<String> = []
+    /// Speaker identification: temporary audio + timed words per source ("mic" or "Others").
+    private var spools: [String: AudioSpool] = [:]
+    private var timedWords: [String: [TimedText]] = [:]
 
     struct Job: Sendable {
         let label: String?
@@ -105,7 +108,11 @@ final class MeetingRecorder: ObservableObject {
             let chunker = LockedChunker()
             chunkers[ObjectIdentifier(source)] = chunker
             let label = source.label
+            // "Me" is already one person; everything else may be several people talking.
+            let spool: AudioSpool? = app.settings.meetingSpeakerLabels && label != "Me" ? AudioSpool() : nil
+            if let spool { spools[Self.key(label)] = spool }
             source.onSamples = { [weak self] samples in
+                spool?.append(samples)
                 let ready = chunker.append(samples)
                 guard !ready.isEmpty else { return }
                 Task { @MainActor in
@@ -137,7 +144,10 @@ final class MeetingRecorder: ObservableObject {
         }
     }
 
+    private static func key(_ label: String?) -> String { label ?? "mic" }
+
     private func cancelStart() async {
+        discardSpeakerData()
         sources.forEach { $0.stop() }
         sources.removeAll()
         jobs?.finish()
@@ -155,8 +165,19 @@ final class MeetingRecorder: ObservableObject {
         defer { backlog = max(0, backlog - 1) }
         guard job.chunk.hasSpeech, var m = meeting else { return }
         do {
-            let raw = try await app.transcribe(job.chunk.samples)
-            var text = WhisperArtifactFilter.clean(raw)
+            var text: String
+            let key = Self.key(job.label)
+            if spools[key] != nil {
+                // Keep word timings so each word can be matched to a speaker after the meeting.
+                let words = try await app.transcribeWords(job.chunk.samples).compactMap { w -> TimedText? in
+                    let t = WhisperArtifactFilter.clean(w.text)
+                    return t.isEmpty ? nil : TimedText(text: t, start: w.start + job.chunk.start, end: w.end + job.chunk.start)
+                }
+                timedWords[key, default: []] += words
+                text = TextTidy.tidy(words.map(\.text).joined(separator: " "))
+            } else {
+                text = WhisperArtifactFilter.clean(try await app.transcribe(job.chunk.samples))
+            }
             text = DictionaryApplier.apply(text, entries: app.dictionary)
             guard !text.isEmpty else { return }
             m = meeting ?? m
@@ -185,13 +206,22 @@ final class MeetingRecorder: ObservableObject {
         clock = nil
         level = 0
         for source in sources {
-            source.stop()
+            source.onSamples = nil
+            source.onLevel = nil
             if let rest = chunkers[ObjectIdentifier(source)]?.flush() {
                 enqueue(Job(label: source.label, chunk: rest))
             }
         }
-        sources.removeAll()
         chunkers.removeAll()
+        // On iPhone, keep the (now muted) audio session running until the recap is written: it's what
+        // lets Wispen keep working if you lock the phone right after the meeting.
+        let heldSources = sources
+        sources.removeAll()
+        #if os(iOS)
+        defer { heldSources.forEach { $0.stop() } }
+        #else
+        heldSources.forEach { $0.stop() }
+        #endif
 
         let background = beginBackgroundWork()
         defer { endBackgroundWork(background) }
@@ -203,12 +233,78 @@ final class MeetingRecorder: ObservableObject {
         jobs = nil
 
         m = meeting ?? m
+        m.segments = await identifySpeakers(in: m.segments)
         m.duration = Date().timeIntervalSince(m.startedAt)
         m.status = .needsRecap
         meeting = m
         app.save(m)
         await summarize(meetingID: m.id)
         meeting = nil
+    }
+
+    /// Splits each multi-person source into "Speaker 1", "Speaker 2"… using the spooled audio, then
+    /// deletes the audio. If anything fails, the unlabelled transcript is kept.
+    private func identifySpeakers(in segments: [TranscriptSegment]) async -> [TranscriptSegment] {
+        defer { discardSpeakerData() }
+        var result = segments
+        for (key, spool) in spools {
+            let words = timedWords[key] ?? []
+            guard !words.isEmpty else { continue }
+            recapStage = "Identifying speakers…"
+            recapProgress = 0
+            let samples = spool.readAll()
+            spool.delete()
+            guard samples.count > Int(AudioMath.sampleRate * 5) else { continue }
+            do {
+                let turns = try await app.diarizer.diarize(samples) { fraction in
+                    Task { @MainActor [weak self] in self?.recapProgress = fraction }
+                }
+                var labelled = SpeakerAssigner.label(words, turns: turns)
+                guard !labelled.isEmpty, !turns.isEmpty else { continue }
+                labelled = labelled.map { seg in
+                    var seg = seg
+                    seg.text = DictionaryApplier.apply(seg.text, entries: app.dictionary)
+                    return seg
+                }
+                result = result.filter { Self.key($0.speaker) != key } + labelled
+                result.sort { $0.start < $1.start }
+            } catch {
+                errorMessage = "Couldn't tell speakers apart: \(error.localizedDescription)"
+            }
+        }
+        await app.diarizer.unload()
+        return result
+    }
+
+    private func discardSpeakerData() {
+        spools.values.forEach { $0.delete() }
+        spools.removeAll()
+        timedWords.removeAll()
+    }
+
+    /// Renames a speaker everywhere in a meeting ("Speaker 1" → "Sam"), including the recap.
+    func renameSpeaker(_ old: String, to new: String, in meetingID: String) {
+        let name = new.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty, name != old, var m = app.meetings.first(where: { $0.id == meetingID }) else { return }
+        for i in m.segments.indices where m.segments[i].speaker == old { m.segments[i].speaker = name }
+        if var recap = m.recap {
+            func swap(_ s: String) -> String { s.replacingOccurrences(of: old, with: name) }
+            recap.summary = swap(recap.summary)
+            recap.topics = recap.topics.map { RecapTopic(id: $0.id, title: swap($0.title), summary: swap($0.summary)) }
+            recap.keyPoints = recap.keyPoints.map(swap)
+            recap.decisions = recap.decisions.map(swap)
+            recap.openQuestions = recap.openQuestions.map(swap)
+            recap.risks = recap.risks.map(swap)
+            recap.followUps = recap.followUps.map(swap)
+            recap.actionItems = recap.actionItems.map { a in
+                var a = a
+                a.task = swap(a.task)
+                if a.owner == old { a.owner = name } else { a.owner = a.owner.map(swap) }
+                return a
+            }
+            m.recap = recap
+        }
+        app.save(m)
     }
 
     /// Generates (or regenerates) the recap for a saved meeting.

@@ -41,6 +41,8 @@ targets:
     dependencies:
       - package: WispenCore
       - package: WhisperKit
+      - package: WhisperKit
+        product: SpeakerKit
       - target: WispenKeyboard
       - target: WispenWidgets
     settings:
@@ -141,6 +143,8 @@ targets:
     dependencies:
       - package: WispenCore
       - package: WhisperKit
+      - package: WhisperKit
+        product: SpeakerKit
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: $(WISPEN_BUNDLE_PREFIX).wispen.mac

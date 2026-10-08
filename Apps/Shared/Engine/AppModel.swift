@@ -29,6 +29,7 @@ final class AppModel: ObservableObject {
 
     let store = WispenStore()
     let transcriber = WhisperTranscriber()
+    let diarizer = SpeakerDiarizer()
 
     @Published var settings: WispenSettings { didSet { if settings != oldValue { persist { try store.settingsFile.save(settings) } } } }
     @Published var dictionary: [DictionaryEntry] { didSet { persist { try store.dictionaryFile.save(dictionary) } } }
@@ -114,6 +115,16 @@ final class AppModel: ObservableObject {
         }
         return try await transcriber.transcribe(samples, prompt: whisperPrompt, language: settings.language,
                                                 englishOnlyModel: settings.whisperModel.englishOnly)
+    }
+
+    /// Words with timestamps (for meetings, so speakers can be matched to words).
+    func transcribeWords(_ samples: [Float]) async throws -> [TimedText] {
+        let loadedID = await transcriber.loadedModelID
+        if !speechModel.isReady || loadedID != settings.whisperModelID {
+            await prepareSpeechModel()
+        }
+        return try await transcriber.transcribeWords(samples, prompt: whisperPrompt, language: settings.language,
+                                                     englishOnlyModel: settings.whisperModel.englishOnly)
     }
 
     // MARK: History

@@ -256,6 +256,13 @@ struct SettingsView: View {
             } footer: {
                 Text("Shows the flow session and meeting recordings in the Dynamic Island and on the Lock Screen, with buttons to end them.")
             }
+            Section {
+                Toggle("Identify speakers", isOn: $app.settings.meetingSpeakerLabels)
+            } header: {
+                Text("Meetings")
+            } footer: {
+                Text("Labels the transcript Speaker 1, Speaker 2… (tap a speaker in a transcript to name them). The audio is kept in a temporary file only until that's done, then deleted.")
+            }
             SharedSettingsSections()
             Section {
                 LabeledContent("Version", value: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0")

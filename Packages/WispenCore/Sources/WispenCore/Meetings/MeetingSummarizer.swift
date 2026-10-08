@@ -1,13 +1,17 @@
 import Foundation
 
-/// Produces a smart recap from a transcript of any length.
+/// Produces a smart recap from a transcript of any length, built the way research meeting-recap
+/// systems are (topic segmentation → per-topic notes → synthesis), sized for a small on-device model:
 ///
-/// Apple's on-device model has a ~4k-token context, while a 60-minute meeting is ~12k tokens. So:
-///  1. **Map** – split the transcript into chunks that fit, and extract structured notes from each.
-///  2. **Reduce** – merge notes in groups that fit, repeating until one set remains.
-///  3. **Final** – one last merge that writes the title and big-picture summary.
-/// Short meetings skip straight to a single pass. If a merge fails, notes are merged mechanically so
-/// the user still gets a recap.
+///  1. **Topic notes** – each transcript part (as big as the context allows) becomes notes per subject:
+///     a synthesized summary plus any decisions / actions / open questions / concerns.
+///  2. **Group** – subjects that continue across parts are grouped (one tiny call over titles only).
+///  3. **Merge** – each group's notes become one story; later statements override earlier ones, so a
+///     question answered later is no longer "open".
+///  4. **Recap** – the final recap is written from the merged subjects with strict section rules,
+///     and the subjects themselves become the "Topics discussed" outline.
+///
+/// Every model step has a mechanical fallback so a recap is always produced.
 public struct MeetingSummarizer: Sendable {
     public typealias Progress = @Sendable (_ completed: Int, _ total: Int, _ stage: String) -> Void
 
@@ -15,7 +19,7 @@ public struct MeetingSummarizer: Sendable {
     /// Tokens reserved for instructions + response.
     public var reservedTokens: Int
 
-    public init(generator: TextGenerator, reservedTokens: Int = 1500) {
+    public init(generator: TextGenerator, reservedTokens: Int = 1600) {
         self.generator = generator
         self.reservedTokens = reservedTokens
     }
@@ -26,65 +30,56 @@ public struct MeetingSummarizer: Sendable {
         let text = transcript.trimmed
         guard !text.isEmpty else { throw LLMError.failed("The transcript is empty.") }
 
-        // Single pass when it fits.
-        if TokenEstimator.estimate(text) <= inputBudget {
-            progress?(0, 1, "Writing recap")
-            let recap = try await finalPass(prompt: Prompts.transcriptPrompt(text), instructions: Prompts.singlePassInstructions)
-            progress?(1, 1, "Done")
-            return recap
-        }
-
-        // Map.
         let chunks = TranscriptChunker.chunk(text, maxTokens: inputBudget)
-        let mergeEstimate = max(1, chunks.count / 3)
-        let total = chunks.count + mergeEstimate + 1
+        let total = chunks.count + (chunks.count > 1 ? 2 : 0) + 1
         var done = 0
-        var notes: [MeetingRecap] = []
+
+        // 1. Topic notes per part.
+        var notes: [TopicNote] = []
         for (i, chunk) in chunks.enumerated() {
-            progress?(done, total, "Reading part \(i + 1) of \(chunks.count)")
-            let partNotes = try await notesForChunk(chunk, part: i + 1, of: chunks.count, depth: 0)
-            notes.append(contentsOf: partNotes)
+            progress?(done, total, chunks.count == 1 ? "Reading the conversation" : "Reading part \(i + 1) of \(chunks.count)")
+            notes += try await topicNotes(chunk, part: i + 1, of: chunks.count, depth: 0)
+            done += 1
+        }
+        notes = notes.filter { !$0.isEmpty }
+        guard !notes.isEmpty else { throw LLMError.failed("Couldn't find any discussion in the transcript.") }
+
+        // 2–3. Connect subjects across parts.
+        var topics = notes
+        if chunks.count > 1, notes.count > 1 {
+            progress?(done, total, "Connecting topics")
+            let groups = await groupTopics(notes)
+            done += 1
+            progress?(done, total, "Combining notes per topic")
+            topics = []
+            for group in groups {
+                let members = group.indices.map { notes[$0] }
+                topics.append(members.count == 1 ? members[0] : await mergeTopic(members, title: group.title))
+            }
             done += 1
         }
 
-        // Reduce until everything fits into one final merge.
-        var round = 0
-        while notes.count > 1, renderedTokens(notes) > inputBudget, round < 6 {
-            round += 1
-            var merged: [MeetingRecap] = []
-            for group in groupsFitting(notes) {
-                progress?(done, total, "Combining notes")
-                if group.count == 1 {
-                    merged.append(group[0])
-                } else {
-                    merged.append(await merge(group, final: false))
-                    done += 1
-                }
-            }
-            // If nothing could be combined (each note alone is over budget), stop and merge mechanically.
-            if merged.count == notes.count { notes = [RecapParser.mechanicalMerge(merged)]; break }
-            notes = merged
-        }
-
+        // 4. Final recap.
         progress?(done, total, "Writing recap")
-        var final = await merge(notes, final: true)
-        if final.title.isEmpty { final.title = notes.first(where: { !$0.title.isEmpty })?.title ?? "" }
+        let recap = await finalRecap(topics)
         progress?(total, total, "Done")
-        return final
+        return recap
     }
 
-    private func notesForChunk(_ chunk: String, part: Int, of total: Int, depth: Int) async throws -> [MeetingRecap] {
+    // MARK: Steps
+
+    private func topicNotes(_ chunk: String, part: Int, of total: Int, depth: Int) async throws -> [TopicNote] {
         do {
             let output = try await generator.generate(
-                instructions: Prompts.chunkNotesInstructions(part: part, of: total),
+                instructions: Prompts.topicNotesInstructions(part: part, of: total),
                 prompt: Prompts.transcriptPrompt(chunk),
                 temperature: 0.2)
-            return [RecapParser.parse(OutputSanitizer.clean(output))]
+            return TopicNotesParser.parse(OutputSanitizer.clean(output))
         } catch LLMError.contextOverflow where depth < 3 {
             // Our estimate was off for this chunk: split it and try again.
             let halves = TranscriptChunker.chunk(chunk, maxTokens: max(200, TokenEstimator.estimate(chunk) / 2))
-            var out: [MeetingRecap] = []
-            for h in halves { out += try await notesForChunk(h, part: part, of: total, depth: depth + 1) }
+            var out: [TopicNote] = []
+            for h in halves { out += try await topicNotes(h, part: part, of: total, depth: depth + 1) }
             return out
         } catch LLMError.refused {
             // Guardrails tripped on this part; keep going without it.
@@ -92,53 +87,102 @@ public struct MeetingSummarizer: Sendable {
         }
     }
 
-    private func merge(_ notes: [MeetingRecap], final: Bool) async -> MeetingRecap {
-        let nonEmpty = notes.filter { !$0.isEmpty }
-        guard !nonEmpty.isEmpty else { return MeetingRecap() }
-        if nonEmpty.count == 1 && !final { return nonEmpty[0] }
-        let rendered = nonEmpty.map { RecapParser.render($0, includeTitle: false) }
-        do {
-            let output = try await generator.generate(
-                instructions: Prompts.mergeNotesInstructions(final: final),
-                prompt: Prompts.notesPrompt(rendered),
-                temperature: 0.2)
-            let recap = RecapParser.parse(OutputSanitizer.clean(output))
-            // A merge that lost almost everything is worse than a mechanical merge.
-            let before = itemCount(RecapParser.mechanicalMerge(nonEmpty))
-            if recap.isEmpty || (before >= 6 && itemCount(recap) < before / 5) {
-                return RecapParser.mechanicalMerge(nonEmpty)
-            }
-            return recap
-        } catch {
-            return RecapParser.mechanicalMerge(nonEmpty)
+    private func groupTopics(_ notes: [TopicNote]) async -> [(indices: [Int], title: String?)] {
+        let prompt = Prompts.groupTopicsPrompt(notes)
+        guard TokenEstimator.estimate(prompt) <= inputBudget,
+              let output = try? await generator.generate(instructions: Prompts.groupTopicsInstructions,
+                                                         prompt: prompt, temperature: 0) else {
+            return Self.groupByTitle(notes)
         }
+        let groups = TopicNotesParser.parseGroups(OutputSanitizer.clean(output), count: notes.count)
+        // If the model returned nothing usable, every topic is its own group: fall back to titles.
+        return groups.count == notes.count ? Self.groupByTitle(notes) : groups
     }
 
-    private func finalPass(prompt: String, instructions: String) async throws -> MeetingRecap {
-        let output = try await generator.generate(instructions: instructions, prompt: prompt, temperature: 0.2)
-        return RecapParser.parse(OutputSanitizer.clean(output))
-    }
-
-    private func itemCount(_ r: MeetingRecap) -> Int {
-        r.keyPoints.count + r.decisions.count + r.actionItems.count + r.openQuestions.count + r.risks.count + r.followUps.count
-    }
-
-    private func renderedTokens(_ notes: [MeetingRecap]) -> Int {
-        TokenEstimator.estimate(Prompts.notesPrompt(notes.map { RecapParser.render($0, includeTitle: false) }))
-    }
-
-    func groupsFitting(_ notes: [MeetingRecap]) -> [[MeetingRecap]] {
-        var groups: [[MeetingRecap]] = []
-        var current: [MeetingRecap] = []
-        for n in notes {
-            if !current.isEmpty, renderedTokens(current + [n]) > inputBudget {
-                groups.append(current)
-                current = []
-            }
-            current.append(n)
+    /// Fallback grouping: identical titles (ignoring case) are the same subject.
+    static func groupByTitle(_ notes: [TopicNote]) -> [(indices: [Int], title: String?)] {
+        var order: [String] = []
+        var map: [String: [Int]] = [:]
+        for (i, n) in notes.enumerated() {
+            let key = n.title.lowercased().trimmed
+            if map[key] == nil { order.append(key) }
+            map[key, default: []].append(i)
         }
-        if !current.isEmpty { groups.append(current) }
-        return groups
+        return order.map { (map[$0]!, notes[map[$0]![0]].title) }
+    }
+
+    private func mergeTopic(_ members: [TopicNote], title: String?) async -> TopicNote {
+        let fallback = TopicNotesParser.mechanicalMerge(members, title: title)
+        let prompt = TopicNotesParser.render(members) + "\n\nCombined:"
+        if TokenEstimator.estimate(prompt) > inputBudget {
+            // Too much for one call: merge each half, then the two results.
+            let mid = members.count / 2
+            guard mid > 0 else { return fallback }
+            let a = await mergeTopic(Array(members[..<mid]), title: title)
+            let b = await mergeTopic(Array(members[mid...]), title: title)
+            return await mergeTopic([a, b], title: title)
+        }
+        guard let output = try? await generator.generate(instructions: Prompts.mergeTopicInstructions,
+                                                         prompt: prompt, temperature: 0.2),
+              var merged = TopicNotesParser.parse(OutputSanitizer.clean(output)).first,
+              !merged.summary.isEmpty else {
+            return fallback
+        }
+        if merged.title.isEmpty { merged.title = fallback.title }
+        // Small models sometimes drop commitments while merging; keep them.
+        if merged.actions.isEmpty { merged.actions = fallback.actions }
+        if merged.decisions.isEmpty { merged.decisions = fallback.decisions }
+        return merged
+    }
+
+    private func finalRecap(_ topics: [TopicNote]) async -> MeetingRecap {
+        var input = topics
+        if TokenEstimator.estimate(Prompts.notesPrompt(input)) > inputBudget {
+            // Shorten each subject's story to its first two sentences.
+            input = topics.map { t in
+                var t = t
+                t.summary = t.summary.components(separatedBy: ". ").prefix(2).joined(separator: ". ")
+                return t
+            }
+        }
+        var recap = MeetingRecap()
+        var modelWroteRecap = false
+        if TokenEstimator.estimate(Prompts.notesPrompt(input)) <= inputBudget,
+           let output = try? await generator.generate(instructions: Prompts.finalRecapInstructions,
+                                                      prompt: Prompts.notesPrompt(input), temperature: 0.2) {
+            recap = RecapParser.parse(OutputSanitizer.clean(output))
+            modelWroteRecap = !recap.isEmpty
+        }
+
+        // Fill gaps from the topic notes themselves.
+        let merged = TopicNotesParser.mechanicalMerge(topics)
+        if recap.title.isEmpty { recap.title = topics.first?.title ?? "" }
+        if recap.summary.isEmpty {
+            recap.summary = topics.prefix(3).compactMap { $0.summary.components(separatedBy: ". ").first }
+                .joined(separator: ". ")
+        }
+        if recap.keyPoints.isEmpty {
+            recap.keyPoints = topics.prefix(6).compactMap { $0.summary.isEmpty ? nil : "\($0.title): \($0.summary)" }
+        }
+        // Commitments and agreements are too important to lose if the model drops them.
+        if recap.actionItems.isEmpty { recap.actionItems = merged.actions }
+        if recap.decisions.isEmpty { recap.decisions = merged.decisions }
+        if !modelWroteRecap {
+            // Leaving these out can be a deliberate judgment call, so only fill them when the model failed.
+            recap.openQuestions = merged.open
+            recap.risks = merged.concerns
+            recap.followUps = merged.later
+        }
+        recap.topics = topics.map { RecapTopic(title: $0.title, summary: $0.summary) }
+
+        // Keep it scannable.
+        recap.keyPoints = Array(recap.keyPoints.prefix(6))
+        recap.decisions = Array(recap.decisions.prefix(8))
+        recap.actionItems = Array(recap.actionItems.prefix(12))
+        recap.openQuestions = Array(recap.openQuestions.prefix(6))
+        recap.risks = Array(recap.risks.prefix(6))
+        recap.followUps = Array(recap.followUps.prefix(6))
+        return recap
     }
 }
 

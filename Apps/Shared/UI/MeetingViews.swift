@@ -24,7 +24,7 @@ struct MeetingsView: View {
                 }
                 .disabled(recorder.isRecording)
             } footer: {
-                Text("Wispen transcribes on-device as the meeting happens, then writes a recap with decisions, action items and open questions. Audio is never saved.")
+                Text("Wispen transcribes on-device as the meeting happens, tells speakers apart, then writes a recap with key points, decisions, action items and open questions. Audio is kept only until speakers are identified, then deleted.")
             }
 
             if app.meetings.isEmpty {
@@ -173,12 +173,19 @@ struct MeetingRecordingView: View {
 struct SegmentRow: View {
     let segment: TranscriptSegment
 
+    static func color(for speaker: String) -> Color {
+        if speaker == "Me" { return .wispenAccent }
+        let palette: [Color] = [.orange, .teal, .pink, .indigo, .green, .brown]
+        let index = speaker.unicodeScalars.reduce(0) { ($0 &* 31 &+ Int($1.value)) & 0xFFFF } % palette.count
+        return palette[index]
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 6) {
                 if let speaker = segment.speaker {
                     Text(speaker).font(.caption.weight(.semibold))
-                        .foregroundStyle(speaker == "Me" ? Color.wispenAccent : Color.orange)
+                        .foregroundStyle(SegmentRow.color(for: speaker))
                 }
                 Text(formatDuration(segment.start)).font(.caption).foregroundStyle(.secondary).monospacedDigit()
             }
@@ -289,13 +296,26 @@ struct RecapView: View {
                     if !recap.summary.isEmpty {
                         Text(recap.summary).font(.body)
                     }
+                    bulletSection("Key points", icon: "star", color: .wispenAccent, items: recap.keyPoints)
                     if !recap.actionItems.isEmpty {
                         RecapSection(title: "Action items", icon: "checklist", color: .green) {
                             ForEach(recap.actionItems) { item in ActionItemRow(meeting: meeting, item: item) }
                         }
                     }
                     bulletSection("Decisions", icon: "checkmark.seal", color: .blue, items: recap.decisions)
-                    bulletSection("Key points", icon: "list.bullet", color: .wispenAccent, items: recap.keyPoints)
+                    if !recap.topics.isEmpty {
+                        RecapSection(title: "Topics discussed", icon: "list.bullet.rectangle", color: .purple) {
+                            ForEach(recap.topics) { topic in
+                                DisclosureGroup {
+                                    Text(topic.summary).font(.callout).textSelection(.enabled)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        .padding(.top, 4)
+                                } label: {
+                                    Text(topic.title).font(.callout.weight(.medium)).foregroundStyle(Color.primary)
+                                }
+                            }
+                        }
+                    }
                     bulletSection("Open questions", icon: "questionmark.bubble", color: .orange, items: recap.openQuestions)
                     bulletSection("Risks & concerns", icon: "exclamationmark.triangle", color: .red, items: recap.risks)
                     bulletSection("Follow-ups", icon: "arrow.uturn.forward", color: .teal, items: recap.followUps)
@@ -365,17 +385,53 @@ struct ActionItemRow: View {
 }
 
 struct TranscriptView: View {
+    @EnvironmentObject var recorder: MeetingRecorder
     let meeting: Meeting
     @State private var search = ""
+    @State private var renaming: String?
+    @State private var newName = ""
+
+    private var speakers: [String] {
+        var seen: [String] = []
+        for s in meeting.segments.compactMap(\.speaker) where !seen.contains(s) { seen.append(s) }
+        return seen
+    }
 
     var body: some View {
         List {
+            if speakers.count > 1 || speakers.contains(where: { $0.hasPrefix("Speaker ") }) {
+                Section {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack {
+                            ForEach(speakers, id: \.self) { speaker in
+                                Button {
+                                    newName = speaker.hasPrefix("Speaker ") ? "" : speaker
+                                    renaming = speaker
+                                } label: {
+                                    Label(speaker, systemImage: "pencil").font(.caption)
+                                }
+                                .buttonStyle(.bordered)
+                            }
+                        }
+                    }
+                } footer: {
+                    Text("Tap a speaker to give them a name. The recap updates too.")
+                }
+            }
             ForEach(meeting.segments.filter { search.isEmpty || $0.text.localizedCaseInsensitiveContains(search) }) { seg in
                 SegmentRow(segment: seg)
             }
         }
         .listStyle(.plain)
         .searchable(text: $search, prompt: "Search transcript")
+        .alert("Who is \(renaming ?? "")?", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
+            TextField("Name", text: $newName)
+            Button("Save") {
+                if let old = renaming { recorder.renameSpeaker(old, to: newName, in: meeting.id) }
+                renaming = nil
+            }
+            Button("Cancel", role: .cancel) { renaming = nil }
+        }
     }
 }
 

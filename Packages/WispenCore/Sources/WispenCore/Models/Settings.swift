@@ -77,6 +77,9 @@ public struct WispenSettings: Codable, Equatable, Sendable {
 
     /// macOS: also capture system audio (Zoom/Meet/Teams) for meetings, labelled "Others".
     public var meetingCaptureSystemAudio: Bool = true
+    /// Tell speakers apart in meeting transcripts ("Speaker 1", "Speaker 2"…). The audio is kept in a
+    /// temporary file until that's done, then deleted.
+    public var meetingSpeakerLabels: Bool = true
 
     // iOS keyboard
     public var keyboardAutoCorrect: Bool = true
@@ -125,6 +128,7 @@ public struct WispenSettings: Codable, Equatable, Sendable {
         keepHistory = try c.decodeIfPresent(Bool.self, forKey: .keepHistory) ?? d.keepHistory
         historyLimit = try c.decodeIfPresent(Int.self, forKey: .historyLimit) ?? d.historyLimit
         meetingCaptureSystemAudio = try c.decodeIfPresent(Bool.self, forKey: .meetingCaptureSystemAudio) ?? d.meetingCaptureSystemAudio
+        meetingSpeakerLabels = try c.decodeIfPresent(Bool.self, forKey: .meetingSpeakerLabels) ?? d.meetingSpeakerLabels
         keyboardAutoCorrect = try c.decodeIfPresent(Bool.self, forKey: .keyboardAutoCorrect) ?? d.keyboardAutoCorrect
         keyboardAutoCapitalize = try c.decodeIfPresent(Bool.self, forKey: .keyboardAutoCapitalize) ?? d.keyboardAutoCapitalize
         keyboardDoubleSpacePeriod = try c.decodeIfPresent(Bool.self, forKey: .keyboardDoubleSpacePeriod) ?? d.keyboardDoubleSpacePeriod

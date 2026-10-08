@@ -203,6 +203,7 @@ struct MacGeneralView: View {
 
             Section {
                 Toggle("Also capture system audio (the other people on a call)", isOn: $app.settings.meetingCaptureSystemAudio)
+                Toggle("Identify speakers (Speaker 1, Speaker 2…)", isOn: $app.settings.meetingSpeakerLabels)
             } header: {
                 Text("Meetings")
             } footer: {

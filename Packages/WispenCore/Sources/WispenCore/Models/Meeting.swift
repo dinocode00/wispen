@@ -34,10 +34,25 @@ public struct ActionItem: Codable, Hashable, Identifiable, Sendable {
     }
 }
 
+/// One subject the meeting discussed, synthesized across the whole conversation.
+public struct RecapTopic: Codable, Hashable, Identifiable, Sendable {
+    public var id: String
+    public var title: String
+    public var summary: String
+
+    public init(id: String = UUID().uuidString, title: String, summary: String) {
+        self.id = id
+        self.title = title
+        self.summary = summary
+    }
+}
+
 /// The smart recap. Every list is optional in practice: empty sections are simply hidden.
 public struct MeetingRecap: Codable, Hashable, Sendable {
     public var title: String
     public var summary: String
+    /// The meeting's subjects in order ("chapters"), each with a short synthesized summary.
+    public var topics: [RecapTopic]
     public var keyPoints: [String]
     public var decisions: [String]
     public var actionItems: [ActionItem]
@@ -45,11 +60,12 @@ public struct MeetingRecap: Codable, Hashable, Sendable {
     public var risks: [String]
     public var followUps: [String]
 
-    public init(title: String = "", summary: String = "", keyPoints: [String] = [], decisions: [String] = [],
-                actionItems: [ActionItem] = [], openQuestions: [String] = [], risks: [String] = [],
-                followUps: [String] = []) {
+    public init(title: String = "", summary: String = "", topics: [RecapTopic] = [], keyPoints: [String] = [],
+                decisions: [String] = [], actionItems: [ActionItem] = [], openQuestions: [String] = [],
+                risks: [String] = [], followUps: [String] = []) {
         self.title = title
         self.summary = summary
+        self.topics = topics
         self.keyPoints = keyPoints
         self.decisions = decisions
         self.actionItems = actionItems
@@ -58,8 +74,22 @@ public struct MeetingRecap: Codable, Hashable, Sendable {
         self.followUps = followUps
     }
 
+    // Recaps saved before topics existed still load.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        title = try c.decodeIfPresent(String.self, forKey: .title) ?? ""
+        summary = try c.decodeIfPresent(String.self, forKey: .summary) ?? ""
+        topics = try c.decodeIfPresent([RecapTopic].self, forKey: .topics) ?? []
+        keyPoints = try c.decodeIfPresent([String].self, forKey: .keyPoints) ?? []
+        decisions = try c.decodeIfPresent([String].self, forKey: .decisions) ?? []
+        actionItems = try c.decodeIfPresent([ActionItem].self, forKey: .actionItems) ?? []
+        openQuestions = try c.decodeIfPresent([String].self, forKey: .openQuestions) ?? []
+        risks = try c.decodeIfPresent([String].self, forKey: .risks) ?? []
+        followUps = try c.decodeIfPresent([String].self, forKey: .followUps) ?? []
+    }
+
     public var isEmpty: Bool {
-        summary.isEmpty && keyPoints.isEmpty && decisions.isEmpty && actionItems.isEmpty
+        summary.isEmpty && topics.isEmpty && keyPoints.isEmpty && decisions.isEmpty && actionItems.isEmpty
             && openQuestions.isEmpty && risks.isEmpty && followUps.isEmpty
     }
 }
