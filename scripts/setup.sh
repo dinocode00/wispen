@@ -56,7 +56,7 @@ install_refresh_job() {
   <key>Label</key><string>app.wispen.refresh</string>
   <key>ProgramArguments</key>
   <array><string>/bin/bash</string><string>$ROOT/scripts/refresh-iphone.sh</string></array>
-  <key>StartInterval</key><integer>3600</integer>
+  <key>StartInterval</key><integer>300</integer>
   <key>RunAtLoad</key><false/>
   <key>StandardOutPath</key><string>$BUILD/refresh.log</string>
   <key>StandardErrorPath</key><string>$BUILD/refresh.log</string>
@@ -65,7 +65,7 @@ install_refresh_job() {
 EOF
   launchctl bootout "gui/$(id -u)" "$PLIST" 2>/dev/null || true
   launchctl bootstrap "gui/$(id -u)" "$PLIST"
-  ok "Every hour, your Mac installs new Wispen updates on your iPhone (and Mac), and renews the iPhone app before it expires."
+  ok "Your Mac now checks for Wispen updates every 5 minutes, installs them on your iPhone and Mac, and renews the iPhone app before it expires."
 }
 
 if [[ "${MODE:-}" == refresh-on ]]; then install_refresh_job; exit 0; fi
