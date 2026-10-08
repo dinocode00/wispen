@@ -13,6 +13,7 @@ struct WispenApp: App {
         WispenActivityActions.endFlowSession = { FlowSessionController.shared.endSession() }
         WispenActivityActions.stopMeeting = { Task { await MeetingRecorder.shared.stop() } }
         LiveActivityController.shared.endStaleActivities()
+        SpeakerReviewStore.purgeExpired()
         LiveActivityController.shared.observe(MeetingRecorder.shared)
     }
 

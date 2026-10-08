@@ -320,3 +320,49 @@ final class AITests: XCTestCase {
         XCTAssertTrue(chunks[0].hasPrefix("Speaker 1:"))
     }
 }
+
+final class SpeakerReviewTests: XCTestCase {
+    func seg(_ speaker: String, _ start: Double, _ text: String) -> TranscriptSegment {
+        TranscriptSegment(start: start, end: start + 2, speaker: speaker, text: text)
+    }
+
+    func testSmoothingRemovesShortIslands() {
+        let words = (0..<9).map { TimedText(text: "w\($0)", start: Double($0) * 0.3, end: Double($0) * 0.3 + 0.25) }
+        let ids: [Int?] = [1, 1, 1, 2, 2, 1, 1, 1, 1]
+        XCTAssertEqual(SpeakerAssigner.smoothIslands(ids, words: words), [1, 1, 1, 1, 1, 1, 1, 1, 1])
+        // A real reply (long enough) is kept.
+        let long: [Int?] = [1, 1, 2, 2, 2, 2, 1, 1, 1]
+        XCTAssertEqual(SpeakerAssigner.smoothIslands(long, words: words), long)
+    }
+
+    func testSamplesSpreadAcrossMeeting() {
+        var segs: [TranscriptSegment] = []
+        for i in 0..<30 {
+            let words = i % 5 == 0 ? "This is a nice long and clear sentence from me number \(i)" : "ok"
+            segs.append(seg(i % 2 == 0 ? "Speaker 1" : "Speaker 2", Double(i * 10), words))
+        }
+        let picks = SpeakerReview.samples(in: segs, for: "Speaker 1")
+        XCTAssertEqual(picks.count, 3)
+        XCTAssertTrue(picks.allSatisfy { $0.text.wordCount > 5 })
+        XCTAssertLessThan(picks[0].start, 100)
+        XCTAssertGreaterThanOrEqual(picks[2].start, 200)
+    }
+
+    func testApplyNamesMergesSamePerson() {
+        let segs = [seg("Speaker 1", 0, "Hi."), seg("Speaker 3", 2.5, "I'm also Speaker 1 really."), seg("Speaker 2", 6, "Hello.")]
+        let out = SpeakerReview.apply(names: ["Speaker 1": "Rex", "Speaker 3": "Rex", "Speaker 2": " Sam "], to: segs)
+        XCTAssertEqual(out.map(\.speaker), ["Rex", "Sam"])
+        XCTAssertEqual(out[0].text, "Hi. I'm also Speaker 1 really.")
+    }
+
+    func testReassign() {
+        let segs = [seg("A", 0, "One."), seg("B", 10, "Two."), seg("A", 20, "Three.")]
+        let out = SpeakerReview.reassign(segmentID: segs[1].id, to: "A", in: segs)
+        XCTAssertEqual(out.map(\.speaker), ["A", "A", "A"], "gaps over 2 s stay separate lines")
+    }
+
+    func testMentionedNames() {
+        let segs = [seg("Speaker 1", 0, "Thanks, Sam. Hi Maria, can you hear me?"), seg("Speaker 2", 3, "Yeah, thanks Sam. Okay everyone.")]
+        XCTAssertEqual(SpeakerReview.mentionedNames(in: segs), ["Sam", "Maria"])
+    }
+}

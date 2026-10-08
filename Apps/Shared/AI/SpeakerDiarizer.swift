@@ -7,12 +7,15 @@ import WispenCore
 actor SpeakerDiarizer {
     private var kit: SpeakerKit?
 
-    func diarize(_ samples: [Float], progress: (@Sendable (Double) -> Void)? = nil) async throws -> [SpeakerTurn] {
+    /// - Parameter speakers: how many people were in the meeting, if known (big accuracy boost).
+    func diarize(_ samples: [Float], speakers: Int? = nil, progress: (@Sendable (Double) -> Void)? = nil) async throws -> [SpeakerTurn] {
         if kit == nil {
             kit = try await SpeakerKit(PyannoteConfig(modelRepo: "argmaxinc/speakerkit-coreml", verbose: false, logLevel: .error))
         }
         guard let kit else { return [] }
-        let result = try await kit.diarize(audioArray: samples, options: PyannoteDiarizationOptions()) { p in
+        var options = PyannoteDiarizationOptions()
+        options.numberOfSpeakers = speakers
+        let result = try await kit.diarize(audioArray: samples, options: options) { p in
             progress?(p.fractionCompleted)
         }
         return result.segments.compactMap { segment in
@@ -61,10 +64,16 @@ final class AudioSpool: @unchecked Sendable {
     }
 
     func delete() {
+        close()
+        try? FileManager.default.removeItem(at: url)
+    }
+
+    /// Stops writing (so the file can be moved).
+    func close() {
         lock.lock()
+        try? handle?.synchronize()
         try? handle?.close()
         lock.unlock()
-        try? FileManager.default.removeItem(at: url)
     }
 
     deinit { try? FileManager.default.removeItem(at: url) }

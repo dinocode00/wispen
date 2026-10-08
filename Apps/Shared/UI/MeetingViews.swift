@@ -9,14 +9,22 @@ struct MeetingsView: View {
     var extraSources: () -> [MeetingAudioSource] = { [] }
     var micLabel: String? = nil
     @State private var showingRecorder = false
+    @State private var reviewing: MeetingRef?
+    /// 0 = detect automatically.
+    @AppStorage("meetingPeopleCount") private var peopleCount = 0
 
     var body: some View {
         List {
             Section {
+                Picker("People in the meeting", selection: $peopleCount) {
+                    Text("Not sure").tag(0)
+                    ForEach(2...8, id: \.self) { Text("\($0)").tag($0) }
+                }
                 Button {
                     willStart()
                     showingRecorder = true
-                    Task { await recorder.start(micLabel: micLabel, extraSources: extraSources()) }
+                    let count = peopleCount == 0 ? nil : peopleCount
+                    Task { await recorder.start(micLabel: micLabel, extraSources: extraSources(), expectedSpeakers: count) }
                 } label: {
                     Label("Record a meeting", systemImage: "record.circle")
                         .font(.headline)
@@ -24,7 +32,7 @@ struct MeetingsView: View {
                 }
                 .disabled(recorder.isRecording)
             } footer: {
-                Text("Wispen transcribes on-device as the meeting happens, tells speakers apart, then writes a recap with key points, decisions, action items and open questions. Audio is kept only until speakers are identified, then deleted.")
+                Text("Wispen transcribes on-device as the meeting happens, tells speakers apart, lets you name them, then writes a recap with key points, decisions, action items and open questions. Knowing how many people are there makes speaker detection much more accurate. Audio is kept only until you've named the speakers, then deleted.")
             }
 
             if app.meetings.isEmpty {
@@ -43,8 +51,16 @@ struct MeetingsView: View {
             MeetingRecordingView { showingRecorder = false }
                 .interactiveDismissDisabled(recorder.isRecording)
         }
+        .sheet(item: $reviewing) { ref in SpeakerReviewView(meetingID: ref.id) }
         .onAppear {
             if recorder.isRecording { showingRecorder = true }
+        }
+        .onChange(of: recorder.lastFinishedMeetingID) {
+            // Right after a meeting with several voices: ask who's who.
+            guard let id = recorder.lastFinishedMeetingID,
+                  app.meetings.first(where: { $0.id == id })?.status == .needsSpeakerReview else { return }
+            showingRecorder = false
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { reviewing = MeetingRef(id: id) }
         }
     }
 }
@@ -62,6 +78,7 @@ struct MeetingRow: View {
                 case .summarizing: StatusBadge(text: "Summarizing", color: .orange)
                 case .needsRecap: StatusBadge(text: "No recap", color: .secondary)
                 case .failed: StatusBadge(text: "Failed", color: .red)
+                case .needsSpeakerReview: StatusBadge(text: "Name speakers", color: .purple)
                 case .ready: EmptyView()
                 }
             }
@@ -261,6 +278,7 @@ struct RecapView: View {
     @EnvironmentObject var app: AppModel
     @EnvironmentObject var recorder: MeetingRecorder
     let meeting: Meeting
+    @State private var reviewing: MeetingRef?
 
     var body: some View {
         ScrollView {
@@ -285,7 +303,28 @@ struct RecapView: View {
                 if let error = meeting.errorMessage {
                     Label(error, systemImage: "exclamationmark.triangle").font(.callout).foregroundStyle(.orange)
                 }
-                if meeting.recap == nil, meeting.status != .summarizing, !meeting.segments.isEmpty {
+                if meeting.status == .needsSpeakerReview {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Label("Who's who?", systemImage: "person.2.badge.gearshape").font(.headline)
+                        Text("Name the speakers so the recap uses real names.").font(.callout).foregroundStyle(.secondary)
+                        Button { reviewing = MeetingRef(id: meeting.id) } label: { Label("Name speakers", systemImage: "person.crop.circle.badge.questionmark") }
+                            .buttonStyle(.borderedProminent)
+                    }
+                    .padding()
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color.purple.opacity(0.1), in: RoundedRectangle(cornerRadius: 12))
+                }
+                if meeting.recapOutdated == true, meeting.status == .ready {
+                    HStack {
+                        Label("Speakers changed since this recap was written.", systemImage: "arrow.triangle.2.circlepath")
+                            .font(.callout)
+                        Spacer()
+                        Button("Update") { Task { await recorder.summarize(meetingID: meeting.id) } }
+                            .buttonStyle(.bordered)
+                    }
+                }
+                if meeting.recap == nil, meeting.status != .summarizing, meeting.status != .needsSpeakerReview,
+                   !meeting.segments.isEmpty {
                     Button {
                         Task { await recorder.summarize(meetingID: meeting.id) }
                     } label: { Label("Generate recap", systemImage: "sparkles") }
@@ -324,6 +363,7 @@ struct RecapView: View {
             .padding()
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .sheet(item: $reviewing) { ref in SpeakerReviewView(meetingID: ref.id) }
     }
 
     @ViewBuilder
@@ -390,12 +430,9 @@ struct TranscriptView: View {
     @State private var search = ""
     @State private var renaming: String?
     @State private var newName = ""
+    @State private var movingSegment: String?
 
-    private var speakers: [String] {
-        var seen: [String] = []
-        for s in meeting.segments.compactMap(\.speaker) where !seen.contains(s) { seen.append(s) }
-        return seen
-    }
+    private var speakers: [String] { meeting.speakers }
 
     var body: some View {
         List {
@@ -415,11 +452,25 @@ struct TranscriptView: View {
                         }
                     }
                 } footer: {
-                    Text("Tap a speaker to give them a name. The recap updates too.")
+                    Text("Tap a speaker to name them. Long-press a line if it's attributed to the wrong person.")
                 }
             }
             ForEach(meeting.segments.filter { search.isEmpty || $0.text.localizedCaseInsensitiveContains(search) }) { seg in
                 SegmentRow(segment: seg)
+                    .contextMenu {
+                        if seg.speaker != nil {
+                            Section("Who said this?") {
+                                ForEach(speakers.filter { $0 != seg.speaker }, id: \.self) { other in
+                                    Button(other) { recorder.reassignSegment(seg.id, to: other, in: meeting.id) }
+                                }
+                                Button("Someone else…") {
+                                    newName = ""
+                                    movingSegment = seg.id
+                                }
+                            }
+                        }
+                        Button { Pasteboard.copy(seg.text) } label: { Label("Copy", systemImage: "doc.on.doc") }
+                    }
             }
         }
         .listStyle(.plain)
@@ -431,6 +482,15 @@ struct TranscriptView: View {
                 renaming = nil
             }
             Button("Cancel", role: .cancel) { renaming = nil }
+        }
+        .alert("Who said this?", isPresented: Binding(get: { movingSegment != nil }, set: { if !$0 { movingSegment = nil } })) {
+            TextField("Name", text: $newName)
+            Button("Save") {
+                let name = newName.trimmingCharacters(in: .whitespaces)
+                if let id = movingSegment, !name.isEmpty { recorder.reassignSegment(id, to: name, in: meeting.id) }
+                movingSegment = nil
+            }
+            Button("Cancel", role: .cancel) { movingSegment = nil }
         }
     }
 }

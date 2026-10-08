@@ -117,6 +117,8 @@ public struct Meeting: Codable, Hashable, Identifiable, Sendable {
         case summarizing
         case ready
         case failed
+        /// Several voices were detected: waiting for you to say who's who before writing the recap.
+        case needsSpeakerReview
     }
 
     public var id: String
@@ -128,6 +130,10 @@ public struct Meeting: Codable, Hashable, Identifiable, Sendable {
     public var recap: MeetingRecap?
     public var chat: [MeetingChatMessage]
     public var errorMessage: String?
+    /// How many people you said were in the meeting (nil = detect automatically).
+    public var expectedSpeakers: Int?
+    /// Speakers or lines were changed after the recap was written.
+    public var recapOutdated: Bool?
 
     public init(id: String = UUID().uuidString, title: String = "", startedAt: Date = Date(), duration: Double = 0,
                 status: Status = .recording, segments: [TranscriptSegment] = [], recap: MeetingRecap? = nil,
@@ -141,6 +147,13 @@ public struct Meeting: Codable, Hashable, Identifiable, Sendable {
         self.recap = recap
         self.chat = chat
         self.errorMessage = errorMessage
+    }
+
+    /// Speaker labels in order of first appearance.
+    public var speakers: [String] {
+        var seen: [String] = []
+        for s in segments.compactMap(\.speaker) where !seen.contains(s) { seen.append(s) }
+        return seen
     }
 
     public var displayTitle: String {

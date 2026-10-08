@@ -51,6 +51,8 @@ final class MeetingRecorder: ObservableObject {
     @Published private(set) var recapStage: String?
     @Published private(set) var recapProgress: Double = 0
     @Published var errorMessage: String?
+    /// The meeting that just finished recording (the UI opens "Who's who?" for it if needed).
+    @Published var lastFinishedMeetingID: String?
 
     private let app: AppModel
     private var sources: [MeetingAudioSource] = []
@@ -75,7 +77,9 @@ final class MeetingRecorder: ObservableObject {
     }
 
     /// - Parameter extraSources: e.g. system audio on macOS.
-    func start(title: String = "", micLabel: String? = nil, extraSources: [MeetingAudioSource] = []) async {
+    /// - Parameter expectedSpeakers: how many people are in the meeting, if you know (better speaker detection).
+    func start(title: String = "", micLabel: String? = nil, extraSources: [MeetingAudioSource] = [],
+               expectedSpeakers: Int? = nil) async {
         guard !isRecording else { return }
         errorMessage = nil
         guard await AudioCapture.requestPermission() else {
@@ -88,7 +92,8 @@ final class MeetingRecorder: ObservableObject {
             return
         }
 
-        let m = Meeting(title: title, startedAt: Date(), status: .recording)
+        var m = Meeting(title: title, startedAt: Date(), status: .recording)
+        m.expectedSpeakers = expectedSpeakers
         meeting = m
         app.save(m)
         startedAt = m.startedAt
@@ -233,47 +238,107 @@ final class MeetingRecorder: ObservableObject {
         jobs = nil
 
         m = meeting ?? m
-        m.segments = await identifySpeakers(in: m.segments)
+        let (segments, needsReview) = await identifySpeakers(meetingID: m.id, in: m.segments, expected: m.expectedSpeakers)
+        m.segments = segments
         m.duration = Date().timeIntervalSince(m.startedAt)
-        m.status = .needsRecap
-        meeting = m
-        app.save(m)
-        await summarize(meetingID: m.id)
+        if needsReview {
+            // Ask "who's who?" first, so the recap uses real names.
+            m.status = .needsSpeakerReview
+            app.save(m)
+            recapStage = nil
+        } else {
+            m.status = .needsRecap
+            meeting = m
+            app.save(m)
+            await summarize(meetingID: m.id)
+        }
+        lastFinishedMeetingID = m.id
         meeting = nil
     }
 
-    /// Splits each multi-person source into "Speaker 1", "Speaker 2"… using the spooled audio, then
-    /// deletes the audio. If anything fails, the unlabelled transcript is kept.
-    private func identifySpeakers(in segments: [TranscriptSegment]) async -> [TranscriptSegment] {
+    /// Splits each multi-person source into "Speaker 1", "Speaker 2"… using the spooled audio. When
+    /// several voices are found, the audio is kept (until you've named them) so you can listen to
+    /// each voice and re-detect. If anything fails, the unlabelled transcript is kept.
+    private func identifySpeakers(meetingID: String, in segments: [TranscriptSegment],
+                                  expected: Int?) async -> ([TranscriptSegment], Bool) {
         defer { discardSpeakerData() }
         var result = segments
+        var needsReview = false
         for (key, spool) in spools {
             let words = timedWords[key] ?? []
             guard !words.isEmpty else { continue }
             recapStage = "Identifying speakers…"
             recapProgress = 0
             let samples = spool.readAll()
-            spool.delete()
             guard samples.count > Int(AudioMath.sampleRate * 5) else { continue }
             do {
-                let turns = try await app.diarizer.diarize(samples) { fraction in
-                    Task { @MainActor [weak self] in self?.recapProgress = fraction }
+                let labelled = try await labelSpeakers(samples: samples, words: words, expected: expected)
+                guard !labelled.isEmpty else { continue }
+                result = (result.filter { $0.speaker == "Me" } + labelled).sorted { $0.start < $1.start }
+                if Set(labelled.compactMap(\.speaker)).count >= 2 {
+                    SpeakerReviewStore.keep(meetingID: meetingID, key: key, spool: spool, words: words)
+                    needsReview = true
                 }
-                var labelled = SpeakerAssigner.label(words, turns: turns)
-                guard !labelled.isEmpty, !turns.isEmpty else { continue }
-                labelled = labelled.map { seg in
-                    var seg = seg
-                    seg.text = DictionaryApplier.apply(seg.text, entries: app.dictionary)
-                    return seg
-                }
-                result = result.filter { Self.key($0.speaker) != key } + labelled
-                result.sort { $0.start < $1.start }
             } catch {
                 errorMessage = "Couldn't tell speakers apart: \(error.localizedDescription)"
             }
         }
         await app.diarizer.unload()
-        return result
+        return (result, needsReview)
+    }
+
+    private func labelSpeakers(samples: [Float], words: [TimedText], expected: Int?) async throws -> [TranscriptSegment] {
+        let turns = try await app.diarizer.diarize(samples, speakers: expected) { fraction in
+            Task { @MainActor [weak self] in self?.recapProgress = fraction }
+        }
+        guard !turns.isEmpty else { return [] }
+        return SpeakerAssigner.label(words, turns: turns).map { seg in
+            var seg = seg
+            seg.text = DictionaryApplier.apply(seg.text, entries: app.dictionary)
+            return seg
+        }
+    }
+
+    // MARK: Speaker review ("Who's who?")
+
+    /// Runs speaker detection again, e.g. with the number of people you know were there.
+    func redetectSpeakers(meetingID: String, count: Int?) async {
+        guard var m = app.meetings.first(where: { $0.id == meetingID }) else { return }
+        defer { recapStage = nil }
+        for key in SpeakerReviewStore.keys(meetingID) {
+            recapStage = "Identifying speakers…"
+            recapProgress = 0
+            let samples = SpeakerReviewStore.samples(meetingID, key: key)
+            let words = SpeakerReviewStore.words(meetingID, key: key)
+            do {
+                let labelled = try await labelSpeakers(samples: samples, words: words, expected: count)
+                guard !labelled.isEmpty else { continue }
+                m.segments = (m.segments.filter { $0.speaker == "Me" } + labelled).sorted { $0.start < $1.start }
+            } catch {
+                errorMessage = "Couldn't re-detect speakers: \(error.localizedDescription)"
+            }
+        }
+        await app.diarizer.unload()
+        m.expectedSpeakers = count
+        app.save(m)
+    }
+
+    /// Applies the names you chose (same name = same person), deletes the kept audio, writes the recap.
+    func finishSpeakerReview(meetingID: String, names: [String: String]) async {
+        guard var m = app.meetings.first(where: { $0.id == meetingID }) else { return }
+        m.segments = SpeakerReview.apply(names: names, to: m.segments)
+        m.status = .needsRecap
+        app.save(m)
+        SpeakerReviewStore.delete(meetingID)
+        await summarize(meetingID: meetingID)
+    }
+
+    /// Moves one transcript line to another speaker.
+    func reassignSegment(_ segmentID: String, to speaker: String, in meetingID: String) {
+        guard var m = app.meetings.first(where: { $0.id == meetingID }) else { return }
+        m.segments = SpeakerReview.reassign(segmentID: segmentID, to: speaker, in: m.segments)
+        if m.recap != nil { m.recapOutdated = true }
+        app.save(m)
     }
 
     private func discardSpeakerData() {
@@ -346,6 +411,7 @@ final class MeetingRecorder: ObservableObject {
             // Keep checkbox state from a previous recap when regenerating.
             m = app.meetings.first(where: { $0.id == meetingID }) ?? m
             m.recap = recap
+            m.recapOutdated = nil
             if m.title.isEmpty { m.title = recap.title }
             m.status = .ready
         } catch {
