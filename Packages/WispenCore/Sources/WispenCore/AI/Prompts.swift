@@ -40,6 +40,9 @@ public enum Prompts {
         return s
     }
 
+    /// Labels the AI Prompt style may add (not counted as "new content" by the rewrite guard).
+    public static let promptSectionLabels: Set<String> = ["goal", "context", "requirements", "steps", "output", "questions"]
+
     public static func cleanupPrompt(transcript: String) -> String {
         "Transcript: \(transcript)\nOutput:"
     }

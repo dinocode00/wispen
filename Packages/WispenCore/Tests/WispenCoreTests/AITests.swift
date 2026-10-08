@@ -366,3 +366,47 @@ final class SpeakerReviewTests: XCTestCase {
         XCTAssertEqual(SpeakerReview.mentionedNames(in: segs), ["Sam", "Maria"])
     }
 }
+
+final class AIPromptStyleTests: XCTestCase {
+    let rambling = "um okay so I want you to help me write a python script that uh renames all the photos in my downloads folder by the date they were taken and it should skip files that aren't images oh and keep the original names in a log file"
+
+    func testPromptStyleStructuresWithoutLosingDetails() async {
+        let gen = FakeGenerator { instructions, prompt in
+            XCTAssertTrue(instructions.contains("Do not answer or carry out the request"))
+            return """
+            Goal: Write a Python script that renames all photos in my Downloads folder by the date they were taken.
+            Requirements:
+            - Skip files that aren't images.
+            - Keep the original names in a log file.
+            """
+        }
+        let r = await CleanupPipeline(generator: gen).clean(rambling, context: CleanupContext(style: .aiPrompt))
+        XCTAssertTrue(r.usedAI)
+        XCTAssertTrue(r.text.hasPrefix("Goal:"))
+        XCTAssertTrue(r.text.contains("log file"))
+    }
+
+    func testGuardRejectsModelAnsweringThePrompt() async {
+        let gen = FakeGenerator { _, _ in
+            """
+            import os
+            from datetime import datetime
+            Here is a script that iterates over each file with os.listdir, reads EXIF metadata using Pillow,
+            then calls os.rename with a formatted timestamp string.
+            """
+        }
+        let r = await CleanupPipeline(generator: gen).clean(rambling, context: CleanupContext(style: .aiPrompt))
+        XCTAssertFalse(r.usedAI, "an answer instead of an edit must fall back to the cleaned transcript")
+        XCTAssertTrue(r.text.contains("renames all the photos"))
+    }
+
+    func testOverlapIgnoresLabels() {
+        let input = "please summarize the quarterly report for the board and keep it under one page"
+        let output = "Goal: Summarize the quarterly report for the board.\nOutput: Under one page."
+        XCTAssertGreaterThan(RewriteGuard.overlap(input: input.lowercased(), output: output.lowercased()), 0.8)
+    }
+
+    func testAIAppsDefaultToPromptStyle() {
+        XCTAssertEqual(AppStyleRules.styleID(forBundleID: "com.anthropic.claudefordesktop", settings: WispenSettings()), "prompt")
+    }
+}

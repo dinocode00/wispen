@@ -67,5 +67,26 @@ public extension DictationStyle {
         instructions: "Keep exactly what was said.",
         verbatim: true, isBuiltIn: true)
 
-    static let builtIns: [DictationStyle] = [.polished, .formal, .casual, .texting, .notes, .verbatimStyle]
+    /// For talking to an AI (ChatGPT, Claude, Cursor…). Built from prompt-writing guidance: lead with
+    /// the goal, give context and the "why", list requirements and constraints, number steps when order
+    /// matters, and state the output you want — while keeping every detail you said.
+    static let aiPrompt = DictationStyle(
+        id: "prompt", name: "AI Prompt", emoji: "🤖",
+        instructions: """
+        The speaker is dictating a request to an AI assistant. Turn it into a clear, well-structured prompt \
+        written in the speaker's first-person voice. Keep EVERY detail, requirement, name, number, file name \
+        and example they said; restructure, never summarize away. Remove rambling, repetition and filler.
+        For a short request, write one or two clear sentences with no headings. For a longer one, use only \
+        the parts that apply, in this order, each as a label followed by text or "- " bullets:
+        Goal: what they want, in one sentence.
+        Context: background, what exists, who it's for, and why.
+        Requirements: specifics and constraints, one per bullet.
+        Steps: numbered, only when they described an order.
+        Output: the format, length or deliverable they asked for.
+        Questions: anything they were unsure about, as questions.
+        Do not answer or carry out the request, and do not add requirements they didn't say.
+        """,
+        isBuiltIn: true)
+
+    static let builtIns: [DictationStyle] = [.polished, .formal, .casual, .texting, .notes, .aiPrompt, .verbatimStyle]
 }
