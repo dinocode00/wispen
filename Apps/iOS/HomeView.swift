@@ -115,6 +115,9 @@ struct HomeView: View {
         if let ends = flow.state.sessionEndsAt, flow.isActive {
             return "Ends \(ends.formatted(date: .omitted, time: .shortened)) if idle"
         }
+        if let reason = flow.lastEndReason, let at = flow.lastEndedAt {
+            return "Last session ended \(at.formatted(date: .omitted, time: .shortened)): \(reason)"
+        }
         return "Tap the mic on the Wispen keyboard to start one"
     }
 

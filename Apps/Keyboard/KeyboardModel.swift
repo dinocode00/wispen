@@ -199,8 +199,20 @@ final class KeyboardModel: ObservableObject {
             return
         }
         waitingSince = Date()
-        if state.isAlive() {
+        let latest = FlowIPC.stateFile.load() ?? state
+        if latest.isAlive() {
             DarwinNotifier.shared.post(.request)
+        } else if latest.mightBeAlive() {
+            // Wispen reported in recently: give it a moment to answer before opening it.
+            DarwinNotifier.shared.post(.request)
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: 1_200_000_000)
+                guard let self else { return }
+                self.refreshState()
+                if !self.state.isAlive() {
+                    self.controller?.openURL(FlowIPC.startURL(requestID: request.id))
+                }
+            }
         } else {
             controller?.openURL(FlowIPC.startURL(requestID: request.id))
         }

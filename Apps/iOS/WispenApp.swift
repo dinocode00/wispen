@@ -70,7 +70,7 @@ struct RootView: View {
             NavigationStack { HomeView() }
                 .tabItem { Label("Flow", systemImage: "waveform") }
             NavigationStack {
-                MeetingsView(willStart: { flow.endSession() })
+                MeetingsView(willStart: { flow.endSession(reason: "A meeting recording started") })
             }
             .tabItem { Label("Meetings", systemImage: "person.2.wave.2") }
             NavigationStack { LibraryView() }

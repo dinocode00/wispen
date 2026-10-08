@@ -75,4 +75,25 @@ final class KeyTouchTests: XCTestCase {
         // Far away: nothing.
         XCTAssertNil(KeyHitTest.index(of: CGPoint(x: 300, y: 300), in: frames))
     }
+
+    func testSessionLivenessWindows() {
+        let now = Date()
+        let fresh = FlowSessionState(phase: .ready, heartbeat: now.addingTimeInterval(-2))
+        XCTAssertTrue(fresh.isAlive(now: now))
+        XCTAssertFalse(fresh.mightBeAlive(now: now))
+        let late = FlowSessionState(phase: .ready, heartbeat: now.addingTimeInterval(-20))
+        XCTAssertFalse(late.isAlive(now: now))
+        XCTAssertTrue(late.mightBeAlive(now: now))
+        let gone = FlowSessionState(phase: .ready, heartbeat: now.addingTimeInterval(-300))
+        XCTAssertFalse(gone.mightBeAlive(now: now))
+        let ended = FlowSessionState(phase: .inactive, heartbeat: now, endReason: "Phone locked")
+        XCTAssertFalse(ended.isAlive(now: now))
+        XCTAssertFalse(ended.mightBeAlive(now: now))
+    }
+
+    func testOldStateFileWithoutEndReasonDecodes() throws {
+        let json = #"{"phase":"ready","mode":"dictation","heartbeat":0}"#.data(using: .utf8)!
+        let s = try JSONDecoder().decode(FlowSessionState.self, from: json)
+        XCTAssertNil(s.endReason)
+    }
 }

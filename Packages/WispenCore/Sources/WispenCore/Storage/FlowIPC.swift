@@ -74,15 +74,18 @@ public struct FlowSessionState: Codable, Equatable, Sendable {
     /// Updated every couple of seconds while the session is alive.
     public var heartbeat: Date
     public var sessionEndsAt: Date?
+    /// Why the last session ended, when it's over ("Phone locked", "iOS closed Wispen in the background"…).
+    public var endReason: String?
 
     public init(phase: Phase, mode: DictationMode = .dictation, requestID: String? = nil, message: String? = nil,
-                heartbeat: Date = Date(), sessionEndsAt: Date? = nil) {
+                heartbeat: Date = Date(), sessionEndsAt: Date? = nil, endReason: String? = nil) {
         self.phase = phase
         self.mode = mode
         self.requestID = requestID
         self.message = message
         self.heartbeat = heartbeat
         self.sessionEndsAt = sessionEndsAt
+        self.endReason = endReason
     }
 
     public static let inactive = FlowSessionState(phase: .inactive)
@@ -90,6 +93,12 @@ public struct FlowSessionState: Codable, Equatable, Sendable {
     /// The app process can be killed without notice, so trust the phase only while the heartbeat is fresh.
     public func isAlive(now: Date = Date(), tolerance: TimeInterval = 6) -> Bool {
         phase != .inactive && now.timeIntervalSince(heartbeat) < tolerance
+    }
+
+    /// Not confirmed alive, but the app reported in recently: it may just be slow to wake, so the keyboard
+    /// should try it before opening Wispen.
+    public func mightBeAlive(now: Date = Date(), within: TimeInterval = 45) -> Bool {
+        phase != .inactive && !isAlive(now: now) && now.timeIntervalSince(heartbeat) < within
     }
 }
 

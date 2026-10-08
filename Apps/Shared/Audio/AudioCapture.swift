@@ -26,6 +26,13 @@ final class AudioCapture: @unchecked Sendable {
                                              channels: 1, interleaved: false)!
     private(set) var isRunning = false
     private var observers: [NSObjectProtocol] = []
+    /// Called (on the main queue) when another app or a call takes the microphone away.
+    var onInterrupted: (() -> Void)?
+    /// How many captures (flow session, meeting) are using the shared audio session.
+    private static var activeCaptures = 0
+
+    /// Running, and the audio engine hasn't been stopped behind our back (calls, Siri, camera, other apps).
+    var isLive: Bool { isRunning && engine.isRunning }
 
     static func requestPermission() async -> Bool {
         #if os(iOS)
@@ -62,6 +69,7 @@ final class AudioCapture: @unchecked Sendable {
         engine.prepare()
         try engine.start()
         isRunning = true
+        Self.activeCaptures += 1
         observeInterruptions()
     }
 
@@ -70,11 +78,26 @@ final class AudioCapture: @unchecked Sendable {
         engine.inputNode.removeTap(onBus: 0)
         engine.stop()
         isRunning = false
+        Self.activeCaptures = max(0, Self.activeCaptures - 1)
         observers.forEach(NotificationCenter.default.removeObserver)
         observers.removeAll()
         #if os(iOS)
-        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        // Only release the shared audio session when nobody else is using it — deactivating it under a
+        // running flow session would silently stop that session's microphone.
+        if Self.activeCaptures == 0 {
+            try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        }
         #endif
+    }
+
+    /// If the engine was stopped behind our back, start it again. Throws if iOS won't allow it right now.
+    func ensureLive() throws {
+        guard isRunning, !engine.isRunning else { return }
+        let samples = onSamples, level = onLevel
+        stop()
+        onSamples = samples
+        onLevel = level
+        try start()
     }
 
     /// Restart after a phone call, Siri, or headphones being plugged in/out.
@@ -86,7 +109,10 @@ final class AudioCapture: @unchecked Sendable {
         #if os(iOS)
         observers.append(center.addObserver(forName: AVAudioSession.interruptionNotification, object: nil, queue: .main) { [weak self] note in
             guard let raw = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
-                  AVAudioSession.InterruptionType(rawValue: raw) == .ended else { return }
+                  let type = AVAudioSession.InterruptionType(rawValue: raw) else { return }
+            if type == .began { self?.onInterrupted?() } else { self?.restart() }
+        })
+        observers.append(center.addObserver(forName: AVAudioSession.mediaServicesWereResetNotification, object: nil, queue: .main) { [weak self] _ in
             self?.restart()
         })
         #endif

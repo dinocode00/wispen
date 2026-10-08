@@ -38,9 +38,24 @@ final class FlowSessionController: ObservableObject {
         NotificationCenter.default.publisher(for: UIApplication.protectedDataWillBecomeUnavailableNotification)
             .sink { [weak self] _ in self?.phoneLocked() }
             .store(in: &bag)
-        // A previous run may have died with a stale "alive" state; clear it.
+        // A previous run may have died with a stale "alive" state; clear it, and remember why it ended.
+        let previous = FlowIPC.stateFile.load()
+        if let previous, previous.phase != .inactive {
+            lastEndReason = "iOS closed Wispen in the background"
+            lastEndedAt = previous.heartbeat
+        } else {
+            lastEndReason = previous?.endReason
+            lastEndedAt = previous?.endReason == nil ? nil : previous?.heartbeat
+        }
+        engine.capture.onInterrupted = { [weak self] in
+            Task { @MainActor in self?.micInterrupted() }
+        }
         publish(.inactive)
     }
+
+    /// Why the last session ended and when, shown on the Flow tab.
+    @Published private(set) var lastEndReason: String?
+    @Published private(set) var lastEndedAt: Date?
 
     var isActive: Bool { state.phase != .inactive }
 
@@ -68,12 +83,38 @@ final class FlowSessionController: ObservableObject {
         Task { await app.prepareSpeechModel() }
     }
 
-    func endSession() {
+    func endSession(reason: String = "You ended it") {
         heartbeat?.invalidate()
         heartbeat = nil
+        if let current {
+            try? FlowIPC.resultFile.save(FlowResult(requestID: current.id, mode: current.mode, text: "", error: reason))
+            DarwinNotifier.shared.post(.result)
+        }
         current = nil
         engine.coolDown()
+        lastEndReason = reason
+        lastEndedAt = Date()
         publish(.inactive)
+    }
+
+    /// A call, Siri, the camera or another recording app took the microphone.
+    private func micInterrupted() {
+        guard isActive else { return }
+        // iOS hands the microphone back when the interruption ends; check again shortly.
+        Task {
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            self.checkMic()
+        }
+    }
+
+    /// Keep the microphone running, which is what keeps Wispen alive in the background.
+    private func checkMic() {
+        guard isActive, !engine.capture.isLive else { return }
+        do {
+            try engine.capture.ensureLive()
+        } catch {
+            endSession(reason: "Another app took the microphone (a call, the camera or a recorder)")
+        }
     }
 
     private var endAfterCurrentDictation = false
@@ -81,7 +122,7 @@ final class FlowSessionController: ObservableObject {
     private func phoneLocked() {
         guard isActive else { return }
         if state.phase == .ready || state.phase == .error {
-            endSession()
+            endSession(reason: "Phone locked")
         } else {
             endAfterCurrentDictation = true // finish what you were saying first
         }
@@ -89,9 +130,10 @@ final class FlowSessionController: ObservableObject {
 
     private func tick() {
         if state.phase == .ready, Date() > idleDeadline {
-            endSession()
+            endSession(reason: "No dictation for \(app.settings.sessionTimeoutMinutes) minutes")
             return
         }
+        checkMic()
         publish(state.phase, message: state.message)
     }
 
@@ -167,7 +209,7 @@ final class FlowSessionController: ObservableObject {
         publish(.ready)
         if endAfterCurrentDictation {
             endAfterCurrentDictation = false
-            endSession()
+            endSession(reason: "Phone locked")
         }
     }
 
@@ -216,7 +258,8 @@ final class FlowSessionController: ObservableObject {
             requestID: requestID ?? (phase == .ready || phase == .inactive ? nil : state.requestID),
             message: message,
             heartbeat: Date(),
-            sessionEndsAt: phase == .inactive || idleDeadline == .distantFuture ? nil : idleDeadline)
+            sessionEndsAt: phase == .inactive || idleDeadline == .distantFuture ? nil : idleDeadline,
+            endReason: phase == .inactive ? lastEndReason : nil)
         try? FlowIPC.stateFile.save(state)
         DarwinNotifier.shared.post(.state)
         LiveActivityController.shared.updateFlow(state, recordingStartedAt: engine.recordingStartedAt)
