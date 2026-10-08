@@ -14,7 +14,14 @@ notify() { osascript -e "display notification \"$1\" with title \"Wispen\"" >/de
 # 1. Pull updates (fast-forward only, so local edits are never overwritten).
 branch="$(git rev-parse --abbrev-ref HEAD)"
 before="$(git rev-parse HEAD)"
-git fetch -q origin "$branch" 2>/dev/null && git merge -q --ff-only "origin/$branch" 2>/dev/null
+if git fetch -q origin "$branch" 2>/dev/null && ! git merge -q --ff-only "origin/$branch" 2>/dev/null; then
+  # The branch's history was rewritten upstream (e.g. to remove personal info). With no local edits,
+  # follow it; otherwise leave things alone.
+  if [[ -z "$(git status --porcelain --untracked-files=no)" ]]; then
+    echo "$(date): branch history was rewritten upstream; following it"
+    git reset -q --hard "origin/$branch"
+  fi
+fi
 now="$(git rev-parse HEAD)"
 if [[ "$now" != "$before" ]]; then
   echo "$(date): pulled update $(git log -1 --format='%h %s')"
