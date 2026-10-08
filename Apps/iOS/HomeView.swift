@@ -57,7 +57,7 @@ struct HomeView: View {
         } header: {
             Text("Flow session")
         } footer: {
-            Text("While a session is active, the Wispen keyboard can dictate into any app. iOS shows an orange mic dot, but Wispen only records while you're dictating.")
+            Text("While a session is active, the Wispen keyboard can dictate into any app. iOS shows an orange mic dot, but Wispen only records while you're dictating. Locking your phone ends the session.")
         }
     }
 

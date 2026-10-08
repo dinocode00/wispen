@@ -34,6 +34,10 @@ final class FlowSessionController: ObservableObject {
         engine.$phase
             .sink { [weak self] phase in self?.engineChanged(phase) }
             .store(in: &bag)
+        // Locking the phone ends the session: no reason to keep the mic ready in your pocket.
+        NotificationCenter.default.publisher(for: UIApplication.protectedDataWillBecomeUnavailableNotification)
+            .sink { [weak self] _ in self?.phoneLocked() }
+            .store(in: &bag)
         // A previous run may have died with a stale "alive" state; clear it.
         publish(.inactive)
     }
@@ -70,6 +74,17 @@ final class FlowSessionController: ObservableObject {
         current = nil
         engine.coolDown()
         publish(.inactive)
+    }
+
+    private var endAfterCurrentDictation = false
+
+    private func phoneLocked() {
+        guard isActive else { return }
+        if state.phase == .ready || state.phase == .error {
+            endSession()
+        } else {
+            endAfterCurrentDictation = true // finish what you were saying first
+        }
     }
 
     private func tick() {
@@ -150,6 +165,10 @@ final class FlowSessionController: ObservableObject {
         DarwinNotifier.shared.post(.result)
         NotificationCenter.default.post(name: .wispenResultWritten, object: nil)
         publish(.ready)
+        if endAfterCurrentDictation {
+            endAfterCurrentDictation = false
+            endSession()
+        }
     }
 
     /// In-app dictation (Home screen "Try it" box). Shares the same engine.
