@@ -69,7 +69,15 @@ private struct Toolbar: View {
 
     @ViewBuilder
     private var middle: some View {
-        if let message = model.message {
+        if let pending = model.pendingInsert {
+            Button { model.insertPending() } label: {
+                Label("Insert “\(pending.prefix(28))\(pending.count > 28 ? "…" : "")”", systemImage: "text.insert")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(KeyColors.accent)
+                    .lineLimit(1)
+            }
+            .buttonStyle(.plain)
+        } else if let message = model.message {
             Text(message)
                 .font(.caption)
                 .foregroundStyle(Color.orange)
