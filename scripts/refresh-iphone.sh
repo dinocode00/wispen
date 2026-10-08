@@ -1,8 +1,8 @@
 #!/bin/bash
-# Run every hour by launchd (see `setup.sh --auto-refresh-on`). It:
+# Run every 5 minutes by launchd (see `setup.sh --auto-refresh-on`). It:
 #   • installs new Wispen updates (new commits on this branch) on the iPhone and the Mac, and
 #   • renews the iPhone app before the free-account 7-day signature expires.
-# Your data on both devices is kept. If the iPhone isn't reachable, it simply tries again next hour.
+# Your data on both devices is kept. If the iPhone isn't reachable, it simply tries again on the next check.
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD="$ROOT/.build-wispen"
@@ -29,7 +29,6 @@ installed_commit="$(cat "$BUILD/iphone-installed-commit" 2>/dev/null || true)"
 installed_at="$(cat "$BUILD/iphone-installed-at" 2>/dev/null || echo 0)"
 age_days=$(( ($(date +%s) - installed_at) / 86400 ))
 if [[ "$installed_commit" == "$now" ]] && (( age_days < 5 )); then
-  echo "$(date): up to date (installed $age_days day(s) ago)."
   exit 0
 fi
 echo "$(date): installing on iPhone (behind: $([[ "$installed_commit" != "$now" ]] && echo yes || echo no), age: $age_days d)"
