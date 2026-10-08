@@ -175,16 +175,32 @@ ok "Wispen.xcodeproj"
 
 build() { # scheme, destination, extra args…
   local scheme="$1" dest="$2"; shift 2
-  echo "     Building $scheme (first build downloads WhisperKit and takes a few minutes)…"
-  if ! xcodebuild build -project Wispen.xcodeproj -scheme "$scheme" -configuration Release \
-      -destination "$dest" -derivedDataPath "$BUILD/DerivedData" \
-      -allowProvisioningUpdates -skipMacroValidation -skipPackagePluginValidation "$@" >"$LOG" 2>&1; then
-    if grep -q "Developer Mode disabled" "$LOG"; then
-      fail "Developer Mode isn't on yet. Turn it on (Settings › Privacy & Security), tap “Turn On” after the restart, then run: $0 --iphone"
+  local attempt
+  for attempt in 1 2 3 4; do
+    echo "     Building $scheme (first build downloads WhisperKit and takes a few minutes)…"
+    if xcodebuild build -project Wispen.xcodeproj -scheme "$scheme" -configuration Release \
+        -destination "$dest" -derivedDataPath "$BUILD/DerivedData" \
+        -allowProvisioningUpdates -skipMacroValidation -skipPackagePluginValidation "$@" >"$LOG" 2>&1; then
+      return 0
     fi
-    grep -E "error:" "$LOG" | sed -n '1,20p' || true
-    fail "Build failed. Full log: $LOG"
-  fi
+    if grep -q "Developer Mode disabled" "$LOG"; then
+      [[ "$QUIET" == 1 ]] && fail "Developer Mode is off on the iPhone."
+      warn "Developer Mode isn't on yet. On the iPhone: Settings › Privacy & Security › Developer Mode › On."
+      echo "     After it restarts, unlock it and tap “Turn On”."
+    elif grep -q "needs to be unlocked\|is locked\|Please unlock" "$LOG"; then
+      [[ "$QUIET" == 1 ]] && fail "iPhone was locked; will try again next time."
+      warn "Your iPhone is locked. Unlock it and keep the screen on while Wispen installs"
+      echo "     (the first time, Xcode spends a minute or two preparing the iPhone)."
+    elif grep -q "Timed out waiting for all destinations" "$LOG"; then
+      [[ "$QUIET" == 1 ]] && fail "iPhone not ready; will try again next time."
+      warn "The iPhone isn't ready yet (Xcode may still be preparing it). Keep it unlocked and connected."
+    else
+      grep -E "error:" "$LOG" | sed -n '1,20p' || true
+      fail "Build failed. Full log: $LOG"
+    fi
+    read -r -p "  Press Return to try again… " _ </dev/tty
+  done
+  fail "Still not working after several tries. Full log: $LOG"
 }
 
 # ───────────────────────────── 4. Mac app ─────────────────────────────
