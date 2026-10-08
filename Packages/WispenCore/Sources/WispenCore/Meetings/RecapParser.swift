@@ -180,6 +180,10 @@ public extension MeetingRecap {
             s += "\n## \(name)\n" + items.map { "- \($0)" }.joined(separator: "\n") + "\n"
         }
         section("Key points", keyPoints)
+        if !topics.isEmpty {
+            s += "\n## Topics discussed\n"
+            for t in topics { s += "- **\(t.title)**: \(t.summary)\n" }
+        }
         section("Decisions", decisions)
         if !actionItems.isEmpty {
             s += "\n## Action items\n"

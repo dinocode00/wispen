@@ -99,6 +99,35 @@ actor WhisperTranscriber {
     ///   - language: ISO code, or nil to auto-detect.
     func transcribe(_ samples: [Float], prompt: String?, language: String?, englishOnlyModel: Bool) async throws -> String {
         guard let pipe else { throw TranscriberError.notLoaded }
+        let options = decodingOptions(pipe: pipe, prompt: prompt, language: language, englishOnlyModel: englishOnlyModel)
+        let results: [TranscriptionResult] = try await pipe.transcribe(audioArray: samples, decodeOptions: options)
+        var text = results.map(\.text).joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
+        // Whisper occasionally echoes the prompt back on near-silent audio.
+        if let prompt { text = text.replacingOccurrences(of: prompt, with: "") }
+        return text
+    }
+
+    /// Meeting transcription: words with their times (seconds from the start of `samples`), so each
+    /// word can later be matched to whoever was speaking at that moment.
+    func transcribeWords(_ samples: [Float], prompt: String?, language: String?, englishOnlyModel: Bool) async throws -> [TimedText] {
+        guard let pipe else { throw TranscriberError.notLoaded }
+        var options = decodingOptions(pipe: pipe, prompt: prompt, language: language, englishOnlyModel: englishOnlyModel)
+        options.withoutTimestamps = false
+        options.wordTimestamps = true
+        let results: [TranscriptionResult] = try await pipe.transcribe(audioArray: samples, decodeOptions: options)
+        var out: [TimedText] = []
+        for segment in results.flatMap(\.segments) {
+            if let words = segment.words, !words.isEmpty {
+                out += words.map { TimedText(text: $0.word, start: Double($0.start), end: Double($0.end)) }
+            } else {
+                out.append(TimedText(text: segment.text, start: Double(segment.start), end: Double(segment.end)))
+            }
+        }
+        if let prompt, out.map(\.text).joined().contains(prompt) { return [] }
+        return out
+    }
+
+    private func decodingOptions(pipe: WhisperKit, prompt: String?, language: String?, englishOnlyModel: Bool) -> DecodingOptions {
         var options = DecodingOptions()
         options.task = .transcribe
         options.language = englishOnlyModel ? "en" : language
@@ -112,10 +141,6 @@ actor WhisperTranscriber {
                 .filter { $0 < tokenizer.specialTokens.specialTokenBegin }
             options.usePrefillPrompt = true
         }
-        let results: [TranscriptionResult] = try await pipe.transcribe(audioArray: samples, decodeOptions: options)
-        var text = results.map(\.text).joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
-        // Whisper occasionally echoes the prompt back on near-silent audio.
-        if let prompt { text = text.replacingOccurrences(of: prompt, with: "") }
-        return text
+        return options
     }
 }

@@ -123,57 +123,185 @@ final class AITests: XCTestCase {
         // ~150 spoken words per minute.
         let sentence = "We talked about the launch plan and the budget for the next quarter in some detail today."
         var lines: [String] = []
-        for i in 0..<(minutes * 9) { lines.append("\(i % 2 == 0 ? "Me" : "Others"): \(sentence) Item \(i).") }
+        for i in 0..<(minutes * 9) { lines.append("\(i % 2 == 0 ? "Speaker 1" : "Speaker 2"): \(sentence) Item \(i).") }
         return lines.joined(separator: "\n")
     }
 
-    func testSummarizerMapReduceFitsSmallContext() async throws {
-        let gen = FakeGenerator(contextTokens: 4096) { instructions, prompt in
-            XCTAssertLessThanOrEqual(TokenEstimator.estimate(instructions + prompt), 4096 - 500, "prompt overflowed context")
-            if instructions.contains("single final recap") {
-                return "TITLE: Quarterly launch planning\nSUMMARY: Big picture.\nKEY POINTS:\n- Launch plan\nACTION ITEMS:\n- Sam: Ship it"
+    /// Fake model that answers each pipeline step like a well-behaved small model.
+    func pipelineModel(expectResolved: Bool = true, onCall: @escaping (String) -> Void = { _ in }) -> FakeGenerator {
+        FakeGenerator(contextTokens: 4096) { instructions, prompt in
+            XCTAssertLessThanOrEqual(TokenEstimator.estimate(instructions + prompt), 4096 - 400, "prompt overflowed context")
+            if instructions.contains("You take notes on part 1 ") {
+                onCall("notes1")
+                return """
+                TOPIC: Launch date
+                SUMMARY: The team debated moving the launch. Sam worried QA is behind.
+                OPEN: Will QA finish in time?
+                CONCERN: QA is two weeks behind
+
+                TOPIC: Small talk
+                SUMMARY: None
+                """
             }
-            return Self.chunkNotes
+            if instructions.contains("You take notes on part") {
+                onCall("notes")
+                return """
+                TOPIC: Launch timing
+                SUMMARY: QA confirmed they will finish by April 28, so the launch stays on May 3.
+                DECISION: Launch stays on May 3
+                ACTION: Sam: Send the launch checklist (due: Friday)
+                """
+            }
+            if instructions.contains("Group the numbers") {
+                onCall("group")
+                XCTAssertTrue(prompt.contains("1. Launch date"))
+                let count = prompt.components(separatedBy: "\n").filter { $0.first?.isNumber == true }.count
+                return (1...count).map(String.init).joined(separator: ", ") + " = Launch timing"
+            }
+            if instructions.contains("SAME subject") {
+                onCall("merge")
+                return """
+                TOPIC: Launch timing
+                SUMMARY: The team debated moving the launch because QA was behind. QA later confirmed April 28, so the launch stays on May 3.
+                DECISION: Launch stays on May 3
+                ACTION: Sam: Send the launch checklist (due: Friday)
+                """
+            }
+            if instructions.contains("final recap") {
+                onCall("final")
+                if expectResolved {
+                    XCTAssertFalse(prompt.contains("Will QA finish in time?"), "resolved question should not reach the final step")
+                }
+                return """
+                TITLE: Launch go/no-go
+                SUMMARY: The team confirmed the May 3 launch after QA committed to April 28.
+                KEY POINTS:
+                - QA's April 28 commitment removes the main schedule risk.
+                DECISIONS:
+                - Launch stays on May 3
+                ACTION ITEMS:
+                - Sam: Send the launch checklist (due: Friday)
+                OPEN QUESTIONS:
+                None
+                RISKS:
+                None
+                FOLLOW-UPS:
+                None
+                """
+            }
+            XCTFail("unexpected step: \(instructions.prefix(60))")
+            return ""
         }
-        let transcript = makeTranscript(minutes: 60)
-        XCTAssertGreaterThan(TokenEstimator.estimate(transcript), 12_000)
+    }
+
+    func testTopicPipelineConnectsTheDots() async throws {
+        final class Calls: @unchecked Sendable { var list: [String] = [] }
+        let calls = Calls()
+        let gen = pipelineModel { calls.list.append($0) }
+        let transcript = makeTranscript(minutes: 30)
         final class Stages: @unchecked Sendable { var list: [String] = [] }
         let stages = Stages()
-        let recap = try await MeetingSummarizer(generator: gen).summarize(transcript: transcript) { _, _, stage in stages.list.append(stage) }
-        XCTAssertEqual(recap.title, "Quarterly launch planning")
+        let recap = try await MeetingSummarizer(generator: gen).summarize(transcript: transcript) { _, _, s in stages.list.append(s) }
+
+        XCTAssertTrue(calls.list.contains("group"))
+        XCTAssertTrue(calls.list.contains("merge"))
+        XCTAssertEqual(calls.list.last, "final")
+        XCTAssertEqual(recap.title, "Launch go/no-go")
+        XCTAssertEqual(recap.decisions, ["Launch stays on May 3"])
         XCTAssertEqual(recap.actionItems.first?.owner, "Sam")
-        XCTAssertGreaterThan(gen.calls.count, 5)
+        XCTAssertEqual(recap.actionItems.first?.due, "Friday")
+        XCTAssertTrue(recap.openQuestions.isEmpty)
+        XCTAssertEqual(recap.topics.map(\.title), ["Launch timing"])
+        XCTAssertTrue(recap.topics[0].summary.contains("April 28"))
         XCTAssertEqual(stages.list.last, "Done")
     }
 
-    func testSummarizerSinglePassForShortMeeting() async throws {
-        let gen = FakeGenerator { instructions, _ in
-            XCTAssertTrue(instructions.contains("recap of a meeting transcript"))
-            return "TITLE: Standup\nSUMMARY: Quick sync.\nDECISIONS:\n- Ship Friday"
-        }
+    func testShortMeetingSkipsGrouping() async throws {
+        final class Calls: @unchecked Sendable { var list: [String] = [] }
+        let calls = Calls()
+        let gen = pipelineModel(expectResolved: false) { calls.list.append($0) }
         let recap = try await MeetingSummarizer(generator: gen).summarize(transcript: makeTranscript(minutes: 2))
-        XCTAssertEqual(gen.calls.count, 1)
-        XCTAssertEqual(recap.decisions, ["Ship Friday"])
+        XCTAssertEqual(calls.list, ["notes1", "final"])
+        XCTAssertEqual(recap.topics.map(\.title), ["Launch date"], "empty small-talk topic is dropped")
     }
 
-    func testSummarizerFallsBackToMechanicalMerge() async throws {
+    func testPipelineFallsBackWhenLaterStepsFail() async throws {
         let gen = FakeGenerator { instructions, _ in
-            if instructions.contains("combine partial notes") { throw LLMError.failed("boom") }
-            return Self.chunkNotes
+            if instructions.contains("You take notes on part") {
+                return "TOPIC: Budget\nSUMMARY: Budget is 40k.\nACTION: Ana: Draft the budget\nOPEN: Who approves it?"
+            }
+            throw LLMError.failed("boom")
         }
         let recap = try await MeetingSummarizer(generator: gen).summarize(transcript: makeTranscript(minutes: 30))
-        XCTAssertEqual(recap.keyPoints, ["Launch moved to May 3"])
-        XCTAssertEqual(recap.actionItems.count, 2)
+        XCTAssertEqual(recap.topics.count, 1, "same-title topics are grouped without the model")
+        XCTAssertEqual(recap.actionItems.map(\.task), ["Draft the budget"])
+        XCTAssertEqual(recap.openQuestions, ["Who approves it?"])
+        XCTAssertFalse(recap.keyPoints.isEmpty)
     }
 
     func testSummarizerSplitsOnContextOverflow() async throws {
-        var overflowed = false
+        final class Flag: @unchecked Sendable { var overflowed = false }
+        let flag = Flag()
+        let base = pipelineModel()
         let gen = FakeGenerator { instructions, prompt in
-            if instructions.contains("part 1 of"), !overflowed { overflowed = true; throw LLMError.contextOverflow }
-            return Self.chunkNotes
+            if instructions.contains("You take notes on part 1 "), !flag.overflowed {
+                flag.overflowed = true
+                throw LLMError.contextOverflow
+            }
+            return try base.handler(instructions, prompt)
         }
         _ = try await MeetingSummarizer(generator: gen).summarize(transcript: makeTranscript(minutes: 20))
-        XCTAssertTrue(overflowed)
+        XCTAssertTrue(flag.overflowed)
+    }
+
+    func testTopicNotesParser() {
+        let notes = TopicNotesParser.parse("""
+        **TOPIC:** Hiring
+        SUMMARY: We need two engineers.
+        The budget allows one now.
+        - ACTION: Unassigned: Post the job
+        DECISION: None
+        OPEN: When does the second role open?
+
+        TOPIC: Offsite
+        SUMMARY: Planning the June offsite.
+        LATER: Venue choice
+        """)
+        XCTAssertEqual(notes.count, 2)
+        XCTAssertEqual(notes[0].title, "Hiring")
+        XCTAssertEqual(notes[0].summary, "We need two engineers. The budget allows one now.")
+        XCTAssertNil(notes[0].actions.first?.owner)
+        XCTAssertTrue(notes[0].decisions.isEmpty)
+        XCTAssertEqual(notes[1].later, ["Venue choice"])
+        let rendered = TopicNotesParser.render(notes)
+        XCTAssertEqual(TopicNotesParser.render(TopicNotesParser.parse(rendered)), rendered)
+    }
+
+    func testGroupParsing() {
+        let g = TopicNotesParser.parseGroups("1, 3 = Pricing\n- 2 = Hiring\n3 = dup\n9 = out of range", count: 4)
+        XCTAssertEqual(g.map(\.indices), [[0, 2], [1], [3]])
+        XCTAssertEqual(g[0].title, "Pricing")
+    }
+
+    func testSpeakerAssignment() {
+        let words = [
+            TimedText(text: " Hi", start: 0.0, end: 0.3), TimedText(text: " Sam.", start: 0.3, end: 0.6),
+            TimedText(text: " Hey!", start: 1.0, end: 1.3), TimedText(text: " Ready?", start: 1.4, end: 1.8),
+            TimedText(text: " Yes", start: 2.5, end: 2.8),
+        ]
+        let turns = [SpeakerTurn(speaker: 7, start: 0, end: 0.8), SpeakerTurn(speaker: 3, start: 0.9, end: 2.0),
+                     SpeakerTurn(speaker: 7, start: 2.4, end: 3.0)]
+        let segs = SpeakerAssigner.label(words, turns: turns)
+        XCTAssertEqual(segs.map(\.speaker), ["Speaker 1", "Speaker 2", "Speaker 1"])
+        XCTAssertEqual(segs.map(\.text), ["Hi Sam.", "Hey! Ready?", "Yes"])
+        XCTAssertEqual(segs[1].start, 1.0)
+    }
+
+    func testSpeakerAssignmentFillsGaps() {
+        let words = [TimedText(text: "a", start: 0, end: 0.2), TimedText(text: "b", start: 10, end: 10.2)]
+        let segs = SpeakerAssigner.label(words, turns: [SpeakerTurn(speaker: 0, start: 0, end: 0.3)])
+        XCTAssertEqual(segs.count, 1)
+        XCTAssertEqual(segs[0].speaker, "Speaker 1")
     }
 
     func testQARetrievesRelevantExcerpt() {
@@ -189,6 +317,6 @@ final class AITests: XCTestCase {
         let chunks = TranscriptChunker.chunk(makeTranscript(minutes: 10), maxTokens: 500)
         XCTAssertGreaterThan(chunks.count, 3)
         for c in chunks { XCTAssertLessThanOrEqual(TokenEstimator.estimate(c), 520) }
-        XCTAssertTrue(chunks[0].hasPrefix("Me:"))
+        XCTAssertTrue(chunks[0].hasPrefix("Speaker 1:"))
     }
 }

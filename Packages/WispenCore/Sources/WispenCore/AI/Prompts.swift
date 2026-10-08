@@ -67,74 +67,103 @@ public enum Prompts {
     }
 
     // MARK: Meetings
+    //
+    // Recaps are built the way research systems do it (topic segmentation → per-topic notes →
+    // synthesis), sized for a ~3B on-device model: one small, well-defined job per call.
 
-    static let recapFormat = """
-    TITLE: <short meeting title>
-    SUMMARY: <2-4 sentence overview>
-    KEY POINTS:
-    - <point>
-    DECISIONS:
-    - <decision>
-    ACTION ITEMS:
-    - <Owner>: <task> (due: <when>)
-    OPEN QUESTIONS:
-    - <question>
-    RISKS:
-    - <risk or concern>
-    FOLLOW-UPS:
-    - <thing to revisit next time>
+    static let topicBlockFormat = """
+    TOPIC: <3-6 word subject title>
+    SUMMARY: <2-3 sentences: what was discussed, the positions people took, and where it landed>
+    DECISION: <something the group clearly agreed on or chose>
+    ACTION: <Owner>: <task someone committed to or was asked to do> (due: <when>)
+    OPEN: <question raised that is still unanswered>
+    CONCERN: <risk, blocker or worry someone raised>
+    LATER: <subject explicitly postponed to another meeting>
     """
 
-    static let recapRules = """
+    static let topicRules = """
     Rules:
-    - Use only what is in the input. Never invent names, numbers, dates or owners.
-    - Be specific: keep names, numbers, dates and product names.
-    - Write "None" under any heading that has nothing.
-    - For action items, use "Unassigned" when no owner was said and leave out "(due: …)" when no date was said.
-    - Use exactly the headings shown, in that order, one item per "- " line.
+    - Synthesize: explain the substance and the reasoning, don't list every remark. Skip greetings and small talk.
+    - DECISION, ACTION, OPEN, CONCERN and LATER lines are optional. Include one only when the transcript clearly \
+    supports it; most topics have just a few. Repeat the tag on a new line for each item.
+    - Never invent names, numbers or dates. Speakers appear as labels like "Speaker 1"; if someone is addressed \
+    by name, use the name. Use "Unassigned" when no owner was said, and leave out "(due: …)" when no date was said.
+    - Output only the blocks, separated by a blank line.
     """
 
-    public static func chunkNotesInstructions(part: Int, of total: Int) -> String {
+    public static func topicNotesInstructions(part: Int, of total: Int) -> String {
         """
-        You take notes on part \(part) of \(total) of a meeting transcript. Lines may start with a speaker label.
-        Extract what happened in this part using this exact format:
+        You take notes on part \(part) of \(total) of a meeting transcript. Each line starts with who is speaking.
+        Work out the distinct subjects discussed in this part (usually 1 to 4) and write one block per subject:
 
-        \(recapFormat)
+        \(topicBlockFormat)
 
-        \(recapRules)
-        - TITLE and SUMMARY describe only this part.
+        \(topicRules)
         """
     }
 
-    public static func mergeNotesInstructions(final: Bool) -> String {
-        """
-        You combine partial notes from consecutive parts of one meeting into \(final ? "a single final recap" : "one set of notes").
-        Merge duplicates, combine related points, keep the most important ones, and keep chronological order.
-        \(final ? "The SUMMARY should give the big picture of the whole meeting in 2-4 sentences. The TITLE is 3-7 words." : "")
-        Use this exact format:
+    public static let groupTopicsInstructions = """
+    Below are numbered subjects (title and summary) from consecutive parts of one meeting. The same subject \
+    often continues across parts under a slightly different title. Group the numbers that are about the same subject.
+    Output one line per group, in order of first appearance, like:
+    1, 4 = Pricing change
+    2 = Hiring plan
+    Every number must appear in exactly one group. Output only these lines.
+    """
 
-        \(recapFormat)
-
-        \(recapRules)
-        """
+    public static func groupTopicsPrompt(_ notes: [TopicNote]) -> String {
+        notes.enumerated().map { i, n in
+            let gist = n.summary.split(separator: ".").first.map(String.init) ?? ""
+            return "\(i + 1). \(n.title) — \(gist)"
+        }.joined(separator: "\n") + "\n\nGroups:"
     }
 
-    public static let singlePassInstructions = """
-    You write a recap of a meeting transcript. Lines may start with a speaker label.
-    The SUMMARY gives the big picture in 2-4 sentences. The TITLE is 3-7 words.
-    Use this exact format:
+    public static let mergeTopicInstructions = """
+    These notes describe the SAME subject at different moments of one meeting, in order. Combine them into ONE block:
 
-    \(recapFormat)
+    \(topicBlockFormat)
 
-    \(recapRules)
+    - Later statements win: if a question was answered later, drop it from OPEN; if a plan changed, keep only the \
+    final decision; if a concern was resolved, drop it.
+    - Remove duplicates and keep concrete details (names, numbers, dates).
+    - SUMMARY: 2-4 sentences telling the story of this subject: what was discussed, the reasoning or disagreement, \
+    and the outcome.
+    - Output only the one block.
     """
+
+    public static let finalRecapInstructions = """
+    You write the final recap of a meeting from notes on each subject it covered.
+
+    Use exactly this format:
+    TITLE: <3-7 words>
+    SUMMARY: <2-4 sentences: why the meeting happened and its main outcomes>
+    KEY POINTS:
+    - <the most important takeaways, most important first>
+    DECISIONS:
+    - <firm agreements only — not ideas or proposals>
+    ACTION ITEMS:
+    - <Owner>: <concrete task> (due: <when>)
+    OPEN QUESTIONS:
+    - <questions still unresolved at the end of the meeting>
+    RISKS:
+    - <risks, blockers and concerns that could affect the outcome>
+    FOLLOW-UPS:
+    - <subjects to revisit in a future discussion (not tasks)>
+
+    Rules:
+    - KEY POINTS are 3 to 6 self-contained insights that synthesize the discussion (why it matters, what was \
+    concluded). Don't repeat decisions or tasks there.
+    - Put each item in exactly ONE section: the best fit. Merge items that overlap.
+    - At most 6 items per section, most important first. Write "None" when a section has nothing.
+    - Use only what is in the notes; keep names, numbers and dates. Each item must make sense on its own.
+    """
+
+    public static func notesPrompt(_ notes: [TopicNote]) -> String {
+        TopicNotesParser.render(notes) + "\n\nRecap:"
+    }
 
     public static func transcriptPrompt(_ transcript: String) -> String {
         "Transcript:\n\(transcript)\n\nNotes:"
-    }
-
-    public static func notesPrompt(_ notes: [String]) -> String {
-        notes.enumerated().map { "### Part \($0.offset + 1)\n\($0.element)" }.joined(separator: "\n\n") + "\n\nCombined:"
     }
 
     public static let meetingQAInstructions = """
