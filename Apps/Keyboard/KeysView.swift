@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import WispenCore
 
 /// One key on the QWERTY keyboard.
 struct KeySpec: Identifiable {
@@ -69,14 +70,6 @@ enum KeyboardLayout {
     }
 }
 
-enum KeyColors {
-    static let character = Color(uiColor: UIColor { $0.userInterfaceStyle == .dark ? UIColor(white: 0.42, alpha: 1) : .white })
-    static let function = Color(uiColor: UIColor {
-        $0.userInterfaceStyle == .dark ? UIColor(white: 0.27, alpha: 1) : UIColor(red: 0.68, green: 0.70, blue: 0.74, alpha: 1)
-    })
-    static let accent = Color(red: 0.42, green: 0.36, blue: 0.95)
-}
-
 struct KeysView: View {
     @ObservedObject var model: KeyboardModel
     let globeKey: GlobeKey
@@ -119,7 +112,11 @@ struct KeyCell: View {
     let visualWidth: CGFloat
     let alignment: Alignment
 
+    @Environment(\.keyPalette) private var palette
     @State private var pressed = false
+    /// Stays on briefly after release so the effect's glow fades out.
+    @State private var lit = false
+    @State private var touchID = UUID()
     @State private var repeatTimer: Timer?
     @State private var repeats = 0
     @State private var dragOrigin: CGFloat?
@@ -153,28 +150,31 @@ struct KeyCell: View {
 
     private var isAccentReturn: Bool { key.kind == .returnKey && model.returnKeyLabel != nil }
 
-    private var fill: Color {
-        if isAccentReturn { return pressed ? KeyColors.function : KeyColors.accent }
-        let base = (isCharacter || key.kind == .space) ? KeyColors.character : KeyColors.function
-        let pressedColor = (isCharacter || key.kind == .space) ? KeyColors.function : KeyColors.character
-        if key.kind == .shift, model.shift != .off, model.layer == .letters { return KeyColors.character }
-        return pressed && !(isCharacter && showsPopup) ? pressedColor : base
+    private var isMod: Bool { !(isCharacter || key.kind == .space) }
+
+    /// Only special states override the look's key color.
+    private var fillOverride: Color? {
+        if isAccentReturn { return pressed ? palette.pressed : palette.accent }
+        if key.kind == .shift, model.shift != .off, model.layer == .letters { return palette.softShadow ? palette.key : palette.pressed }
+        return nil
     }
 
-    private var showsPopup: Bool { isCharacter && pressed }
+    private var showsPopup: Bool { isCharacter && pressed && model.theme.popups }
 
     private var cap: some View {
-        RoundedRectangle(cornerRadius: 6, style: .continuous)
-            .fill(fill)
-            .shadow(color: .black.opacity(0.3), radius: 0, x: 0, y: 1)
-            .overlay { label }
+        ThemedKeyCap(palette: palette, isMod: isMod, fillOverride: fillOverride,
+                     lit: lit && !(showsPopup && model.effects.effect == .none),
+                     effect: model.effects.effect) { label }
             .overlay(alignment: .bottom) {
                 if showsPopup {
                     Text(displayCharacter)
-                        .font(.system(size: 34))
-                        .foregroundStyle(Color.primary)
+                        .font(palette.font(34))
+                        .foregroundStyle(palette.popupText)
+                        .shadow(color: palette.textGlow ?? .clear, radius: palette.textGlow == nil ? 0 : 3)
                         .frame(width: visualWidth * 1.35, height: height * 1.05)
-                        .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(KeyColors.character)
+                        .background(RoundedRectangle(cornerRadius: palette.radius + 3, style: .continuous).fill(palette.popup)
+                            .overlay { RoundedRectangle(cornerRadius: palette.radius + 3, style: .continuous)
+                                .strokeBorder(palette.border ?? .clear, lineWidth: palette.border == nil ? 0 : 1) }
                             .shadow(color: .black.opacity(0.35), radius: 2, y: 1))
                         .offset(y: -height * 0.92)
                         .allowsHitTesting(false)
@@ -191,22 +191,22 @@ struct KeyCell: View {
     private var label: some View {
         switch key.kind {
         case .character:
-            Text(displayCharacter).font(.system(size: 23)).foregroundStyle(Color.primary)
+            Text(displayCharacter).font(palette.font(23))
         case .shift:
             Image(systemName: model.shift == .locked ? "capslock.fill" : (model.shift == .once ? "shift.fill" : "shift"))
-                .font(.system(size: 18, weight: .medium)).foregroundStyle(Color.primary)
+                .font(.system(size: 18, weight: .medium))
         case .delete:
             Image(systemName: pressed ? "delete.left.fill" : "delete.left")
-                .font(.system(size: 18, weight: .medium)).foregroundStyle(Color.primary)
+                .font(.system(size: 18, weight: .medium))
         case .layer(let l), .symbols(let l):
-            Text(l).font(.system(size: 16)).foregroundStyle(Color.primary)
+            Text(l).font(palette.font(16))
         case .space:
-            Text("space").font(.system(size: 16)).foregroundStyle(Color.primary)
+            Text("space").font(palette.font(16))
         case .returnKey:
             if let label = model.returnKeyLabel {
-                Text(label).font(.system(size: 16)).foregroundStyle(.white)
+                Text(label).font(palette.font(16)).foregroundStyle(palette.accentText)
             } else {
-                Image(systemName: "return").font(.system(size: 18)).foregroundStyle(Color.primary)
+                Image(systemName: "return").font(.system(size: 18))
             }
         case .globe:
             EmptyView()
@@ -228,16 +228,24 @@ struct KeyCell: View {
     // MARK: Behaviour
 
     private var gesture: some Gesture {
-        DragGesture(minimumDistance: 0)
+        DragGesture(minimumDistance: 0, coordinateSpace: .named(KeyEffectsEngine.space))
             .onChanged { value in
                 if !pressed {
                     pressed = true
+                    lit = true
+                    touchID = UUID()
+                    model.effects.began(touchID, at: value.location, keySize: CGSize(width: visualWidth, height: height),
+                                        isDelete: key.kind == .delete)
                     touchDown()
+                } else {
+                    model.effects.moved(touchID, to: value.location)
                 }
                 if key.kind == .space { trackpad(value.translation.width) }
             }
             .onEnded { _ in
                 pressed = false
+                withAnimation(.easeOut(duration: 0.5)) { lit = false }
+                model.effects.ended(touchID)
                 touchUp()
             }
     }

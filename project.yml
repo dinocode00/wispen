@@ -38,6 +38,7 @@ targets:
       - path: Apps/iOS
       - path: Apps/Shared
       - path: Apps/LiveActivity
+      - path: Apps/KeyboardTheme
     dependencies:
       - package: WispenCore
       - package: WhisperKit
@@ -81,6 +82,7 @@ targets:
     platform: iOS
     sources:
       - path: Apps/Keyboard
+      - path: Apps/KeyboardTheme
     dependencies:
       - package: WispenCore
     settings:

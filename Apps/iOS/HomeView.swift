@@ -268,6 +268,13 @@ struct SettingsView: View {
     var body: some View {
         Form {
             Section {
+                NavigationLink { KeyboardLookView() } label: {
+                    LabeledContent {
+                        Text("\(app.settings.keyboardTheme.look.name) · \(app.settings.keyboardTheme.effect.name)")
+                    } label: {
+                        Label("Look & effects", systemImage: "paintpalette")
+                    }
+                }
                 Toggle("Auto-correction", isOn: $app.settings.keyboardAutoCorrect)
                 Toggle("Suggestions", isOn: $app.settings.keyboardSuggestions)
                 Toggle("Auto-capitalization", isOn: $app.settings.keyboardAutoCapitalize)

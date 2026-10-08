@@ -89,6 +89,8 @@ public struct WispenSettings: Codable, Equatable, Sendable {
     public var keyboardSuggestions: Bool = true
     public var keyboardHaptics: Bool = true
     public var keyboardSounds: Bool = false
+    /// Look and touch effects of the Wispen keyboard.
+    public var keyboardTheme = KeyboardTheme()
 
     /// iOS: show the flow session and meetings in the Dynamic Island and on the Lock Screen.
     public var liveActivities: Bool = true
@@ -136,6 +138,7 @@ public struct WispenSettings: Codable, Equatable, Sendable {
         keyboardSuggestions = try c.decodeIfPresent(Bool.self, forKey: .keyboardSuggestions) ?? d.keyboardSuggestions
         keyboardHaptics = try c.decodeIfPresent(Bool.self, forKey: .keyboardHaptics) ?? d.keyboardHaptics
         keyboardSounds = try c.decodeIfPresent(Bool.self, forKey: .keyboardSounds) ?? d.keyboardSounds
+        keyboardTheme = (try? c.decodeIfPresent(KeyboardTheme.self, forKey: .keyboardTheme)) ?? d.keyboardTheme
         liveActivities = try c.decodeIfPresent(Bool.self, forKey: .liveActivities) ?? d.liveActivities
     }
 
