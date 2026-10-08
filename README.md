@@ -77,7 +77,9 @@ git clone -b claude/wispen-v1 https://github.com/dinocode00/wispen.git ~/wispen 
 
 The script installs Homebrew/XcodeGen if needed, finds your Personal Team, picks unique bundle IDs, generates the
 project, builds and installs the **Mac app** (in `/Applications`, opens at login) and the **iPhone app**, and offers
-to **reinstall it on your iPhone automatically every week** (free Apple IDs expire apps after 7 days).
+to **keep it updated automatically**: every hour your Mac installs new Wispen updates on your iPhone and Mac over
+Wi-Fi, and renews the iPhone app before it expires (free Apple IDs expire apps after 7 days). Your data is kept.
+Turn it on any time with `./scripts/setup.sh --auto-refresh-on` (log: `.build-wispen/refresh.log`).
 Re-run it any time, e.g. after `git pull`. Options: `--mac`, `--iphone`, `--auto-refresh-on`, `--auto-refresh-off`.
 
 **What only you can tap** (the script tells you when):

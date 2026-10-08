@@ -32,7 +32,10 @@ actor WhisperTranscriber {
                 folder = try await WhisperKit.download(variant: modelID, progressCallback: { p in
                     progress(p.fractionCompleted)
                 })
-                UserDefaults.standard.set(folder.path, forKey: Self.folderKey(modelID))
+                // Store the path relative to Documents: iOS can move the app's container on updates.
+                let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].path
+                let path = folder.path.hasPrefix(docs) ? String(folder.path.dropFirst(docs.count)) : folder.path
+                UserDefaults.standard.set(path, forKey: Self.folderKey(modelID))
             }
             let config = WhisperKitConfig(
                 model: modelID,
@@ -64,11 +67,16 @@ actor WhisperTranscriber {
 
     private static func cachedFolder(for modelID: String) -> URL? {
         var candidates: [URL] = []
+        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
         if let saved = UserDefaults.standard.string(forKey: folderKey(modelID)) {
-            candidates.append(URL(fileURLWithPath: saved))
+            if saved.hasPrefix("/"), FileManager.default.fileExists(atPath: saved) {
+                candidates.append(URL(fileURLWithPath: saved))
+            } else if let docs {
+                candidates.append(docs.appendingPathComponent(saved))
+            }
         }
         // WhisperKit's default download location (covers installs from before this cache existed).
-        if let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first {
+        if let docs {
             candidates.append(docs.appendingPathComponent("huggingface/models/argmaxinc/whisperkit-coreml/\(modelID)"))
         }
         let required = ["AudioEncoder.mlmodelc", "TextDecoder.mlmodelc", "MelSpectrogram.mlmodelc"]
