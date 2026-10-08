@@ -20,6 +20,7 @@ public enum FlowIPC {
     public static var requestFile: JSONFile<FlowRequest> { JSONFile(name: "request.json", in: WispenPaths.ipc) }
     public static var stateFile: JSONFile<FlowSessionState> { JSONFile(name: "state.json", in: WispenPaths.ipc) }
     public static var resultFile: JSONFile<FlowResult> { JSONFile(name: "result.json", in: WispenPaths.ipc) }
+    public static var keyboardStatusFile: JSONFile<KeyboardStatus> { JSONFile(name: "keyboard.json", in: WispenPaths.ipc) }
 
     /// URL the keyboard opens to start a session: `wispen://flow?request=<id>`.
     public static let urlScheme = "wispen"
@@ -87,6 +88,18 @@ public struct FlowSessionState: Codable, Equatable, Sendable {
     /// The app process can be killed without notice, so trust the phase only while the heartbeat is fresh.
     public func isAlive(now: Date = Date(), tolerance: TimeInterval = 6) -> Bool {
         phase != .inactive && now.timeIntervalSince(heartbeat) < tolerance
+    }
+}
+
+/// Written by the keyboard whenever it opens, so the app can tell it's installed with Full Access.
+/// (Without Full Access the keyboard can't write to the shared container at all.)
+public struct KeyboardStatus: Codable, Equatable, Sendable {
+    public var lastSeen: Date
+    public var hasFullAccess: Bool
+
+    public init(lastSeen: Date = Date(), hasFullAccess: Bool) {
+        self.lastSeen = lastSeen
+        self.hasFullAccess = hasFullAccess
     }
 }
 

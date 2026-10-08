@@ -5,13 +5,21 @@ import WispenCore
 struct HomeView: View {
     @EnvironmentObject var app: AppModel
     @EnvironmentObject var flow: FlowSessionController
+    /// Re-check keyboard setup each time you come back from Settings.
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var keyboard = KeyboardSetup.current
+    @State private var lastResult = FlowIPC.resultFile.load()
 
     var body: some View {
         List {
             sessionSection
             TryItSection(engine: flow.engine)
             setupSection
+            lastDictationSection
         }
+        .onAppear(perform: refreshChecks)
+        .onChange(of: scenePhase) { if scenePhase == .active { refreshChecks() } }
+        .onReceive(NotificationCenter.default.publisher(for: .wispenResultWritten)) { _ in refreshChecks() }
         .navigationTitle("Wispen")
     }
 
@@ -76,6 +84,11 @@ struct HomeView: View {
         return "Tap the mic on the Wispen keyboard to start one"
     }
 
+    private func refreshChecks() {
+        keyboard = KeyboardSetup.current
+        lastResult = FlowIPC.resultFile.load()
+    }
+
     private var setupSection: some View {
         Section {
             SetupRow(done: app.speechModel.isReady, title: "Speech model",
@@ -84,14 +97,37 @@ struct HomeView: View {
             }
             let ai = GeneratorFactory.appleIntelligenceStatus()
             SetupRow(done: ai.ready, title: "Apple Intelligence", detail: ai.message, action: nil)
-            SetupRow(done: false, title: "Add the Wispen keyboard",
-                     detail: "Settings › General › Keyboard › Keyboards › Add New Keyboard › Wispen. Then tap Wispen and turn on Allow Full Access (needed to talk to this app — nothing leaves your phone).") {
+            SetupRow(done: keyboard == .ready, title: "Add the Wispen keyboard", detail: keyboard.detail) {
                 if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
             }
-            SetupRow(done: false, title: "Use it",
+            SetupRow(done: !app.history.isEmpty, title: "Use it",
                      detail: "In any app, hold 🌐 on the keyboard and pick Wispen. Tap the mic, talk, tap again. Select text first to edit it by voice.", action: nil)
         } header: {
             Text("Setup")
+        }
+    }
+
+    /// The last keyboard dictation, so problems are visible (and easy to report).
+    @ViewBuilder
+    private var lastDictationSection: some View {
+        if let result = lastResult {
+            Section {
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack {
+                        Image(systemName: result.error == nil ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                            .foregroundStyle(result.error == nil ? Color.green : Color.orange)
+                        Text(result.date, style: .relative).font(.caption).foregroundStyle(.secondary)
+                        Text("ago").font(.caption).foregroundStyle(.secondary)
+                    }
+                    if let error = result.error {
+                        Text(error).font(.callout)
+                    } else {
+                        Text(result.text).font(.callout).lineLimit(4)
+                    }
+                }
+            } header: {
+                Text("Last keyboard dictation")
+            }
         }
     }
 }
@@ -238,4 +274,40 @@ struct EngineMeter: View {
     var body: some View {
         LevelMeter(level: engine.level, bars: bars, color: color)
     }
+}
+
+/// Is the Wispen keyboard added, and does it have Full Access?
+enum KeyboardSetup {
+    case notAdded, needsFullAccess, ready
+
+    static var current: KeyboardSetup {
+        let status = FlowIPC.keyboardStatusFile.load()
+        if status?.hasFullAccess == true { return .ready }
+        return (status != nil || isEnabledInSettings) ? .needsFullAccess : .notAdded
+    }
+
+    /// Whether Wispen appears in the user's list of keyboards.
+    private static var isEnabledInSettings: Bool {
+        let keyboardID = (Bundle.main.bundleIdentifier ?? "") + ".keyboard"
+        let selector = NSSelectorFromString("identifier")
+        return UITextInputMode.activeInputModes.contains { mode in
+            mode.responds(to: selector) && (mode.value(forKey: "identifier") as? String) == keyboardID
+        }
+    }
+
+    var detail: String {
+        switch self {
+        case .ready:
+            return "Wispen keyboard is on with Full Access."
+        case .needsFullAccess:
+            return "Almost there: Keyboards › Wispen › turn on Allow Full Access. Then open the Wispen keyboard once (e.g. in Messages) — this turns green."
+        case .notAdded:
+            return "Tap Open › Keyboards › turn on Wispen and Allow Full Access. Then open the Wispen keyboard once (e.g. in Messages) — this turns green."
+        }
+    }
+}
+
+extension Notification.Name {
+    /// Posted in-process when the flow session delivers a keyboard dictation result.
+    static let wispenResultWritten = Notification.Name("wispenResultWritten")
 }

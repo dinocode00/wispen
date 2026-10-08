@@ -132,7 +132,12 @@ final class FlowSessionController: ObservableObject {
             bumpIdle()
             publish(.recording, mode: request.mode, requestID: request.id)
         } catch {
-            fail(error.localizedDescription)
+            // Tell the keyboard right away instead of leaving it waiting.
+            try? FlowIPC.resultFile.save(FlowResult(requestID: request.id, mode: request.mode, text: "",
+                                                    error: error.localizedDescription))
+            DarwinNotifier.shared.post(.result)
+            lastError = error.localizedDescription
+            publish(.ready)
         }
     }
 
@@ -142,6 +147,7 @@ final class FlowSessionController: ObservableObject {
         bumpIdle()
         try? FlowIPC.resultFile.save(FlowResult(requestID: request.id, mode: request.mode, text: outcome.text, error: outcome.error))
         DarwinNotifier.shared.post(.result)
+        NotificationCenter.default.post(name: .wispenResultWritten, object: nil)
         publish(.ready)
     }
 
@@ -164,7 +170,9 @@ final class FlowSessionController: ObservableObject {
     private func engineChanged(_ phase: DictationEngine.Phase) {
         guard isActive else { return }
         switch phase {
-        case .transcribing: publish(.transcribing, mode: current?.mode ?? .dictation, requestID: current?.id)
+        case .transcribing:
+            publish(.transcribing, mode: current?.mode ?? .dictation, requestID: current?.id,
+                    message: app.speechModel.isReady ? nil : "Loading the speech model…")
         case .polishing: publish(.polishing, mode: current?.mode ?? .dictation, requestID: current?.id)
         default: break
         }

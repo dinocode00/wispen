@@ -17,22 +17,30 @@ actor WhisperTranscriber {
     var isLoaded: Bool { pipe != nil }
 
     /// Downloads (first time only) and loads a model. Safe to call repeatedly.
+    /// - Parameter progress: download progress 0…1; only called when files actually need downloading.
     func load(modelID: String, progress: @escaping @Sendable (Double) -> Void) async throws {
         if loadedModelID == modelID, pipe != nil { return }
         if let loading { return try await loading.value }
 
         let task = Task {
             self.pipe = nil
-            let folder = try await WhisperKit.download(variant: modelID, progressCallback: { p in
-                progress(p.fractionCompleted)
-            })
+            // Reuse the copy already on disk; only talk to the network when it's missing.
+            let folder: URL
+            if let cached = Self.cachedFolder(for: modelID) {
+                folder = cached
+            } else {
+                folder = try await WhisperKit.download(variant: modelID, progressCallback: { p in
+                    progress(p.fractionCompleted)
+                })
+                UserDefaults.standard.set(folder.path, forKey: Self.folderKey(modelID))
+            }
             let config = WhisperKitConfig(
                 model: modelID,
                 modelFolder: folder.path,
                 computeOptions: Self.computeOptions,
                 verbose: false,
                 logLevel: .error,
-                prewarm: true,
+                prewarm: false, // prewarm loads everything twice; a normal load is enough
                 load: true,
                 download: false)
             let pipe = try await WhisperKit(config)
@@ -40,7 +48,33 @@ actor WhisperTranscriber {
         }
         loading = task
         defer { loading = nil }
-        try await task.value
+        do {
+            try await task.value
+        } catch {
+            // A damaged download: forget it so the next attempt fetches it again.
+            UserDefaults.standard.removeObject(forKey: Self.folderKey(modelID))
+            throw error
+        }
+    }
+
+    /// Whether the model's files are already on this device.
+    static func isDownloaded(_ modelID: String) -> Bool { cachedFolder(for: modelID) != nil }
+
+    private static func folderKey(_ modelID: String) -> String { "whisperModelFolder.\(modelID)" }
+
+    private static func cachedFolder(for modelID: String) -> URL? {
+        var candidates: [URL] = []
+        if let saved = UserDefaults.standard.string(forKey: folderKey(modelID)) {
+            candidates.append(URL(fileURLWithPath: saved))
+        }
+        // WhisperKit's default download location (covers installs from before this cache existed).
+        if let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first {
+            candidates.append(docs.appendingPathComponent("huggingface/models/argmaxinc/whisperkit-coreml/\(modelID)"))
+        }
+        let required = ["AudioEncoder.mlmodelc", "TextDecoder.mlmodelc", "MelSpectrogram.mlmodelc"]
+        return candidates.first { folder in
+            required.allSatisfy { FileManager.default.fileExists(atPath: folder.appendingPathComponent($0).path) }
+        }
     }
 
     private func finishLoading(_ pipe: WhisperKit, modelID: String) {

@@ -20,7 +20,7 @@ final class AppModel: ObservableObject {
             switch self {
             case .notLoaded: return "Not downloaded"
             case .downloading(let p): return "Downloading… \(Int(p * 100))%"
-            case .loading: return "Preparing model (first time can take a few minutes)…"
+            case .loading: return "Loading speech model…"
             case .ready: return "Ready"
             case .failed(let why): return "Failed: \(why)"
             }
@@ -46,6 +46,16 @@ final class AppModel: ObservableObject {
         customStyles = store.loadCustomStyles()
         history = store.loadHistory()
         meetings = store.loadMeetings()
+        #if os(iOS)
+        // One-time move to the compact model: the big one is too heavy for background dictation.
+        if !UserDefaults.standard.bool(forKey: "migratedToCompactModel") {
+            UserDefaults.standard.set(true, forKey: "migratedToCompactModel")
+            if settings.whisperModelID == WhisperModelOption.best {
+                settings.whisperModelID = WhisperModelOption.compact
+                try? store.settingsFile.save(settings)
+            }
+        }
+        #endif
     }
 
     private func persist(_ work: () throws -> Void) {
@@ -83,7 +93,7 @@ final class AppModel: ObservableObject {
         let modelID = settings.whisperModelID
         let loadedID = await transcriber.loadedModelID
         if speechModel.isReady, loadedID == modelID { return }
-        speechModel = .downloading(0)
+        speechModel = WhisperTranscriber.isDownloaded(modelID) ? .loading : .downloading(0)
         do {
             try await transcriber.load(modelID: modelID) { fraction in
                 Task { @MainActor in
