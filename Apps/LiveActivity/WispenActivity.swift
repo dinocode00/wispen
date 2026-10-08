@@ -39,7 +39,7 @@ enum WispenActivityActions {
 }
 
 struct EndFlowSessionIntent: LiveActivityIntent {
-    static let title: LocalizedStringResource = "End Wispen session"
+    static let title: LocalizedStringResource = "End Wispen"
     static let description = IntentDescription("Stops the background flow session and turns off the microphone.")
 
     init() {}

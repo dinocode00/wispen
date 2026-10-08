@@ -144,5 +144,8 @@ struct WispenShortcuts: AppShortcutsProvider {
         AppShortcut(intent: StartFlowSessionIntent(),
                     phrases: ["Start \(.applicationName)", "Start \(.applicationName) session"],
                     shortTitle: "Start Wispen", systemImageName: "waveform")
+        AppShortcut(intent: EndFlowSessionIntent(),
+                    phrases: ["End \(.applicationName)", "Stop \(.applicationName)"],
+                    shortTitle: "End Wispen", systemImageName: "mic.slash")
     }
 }
