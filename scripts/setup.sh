@@ -230,22 +230,35 @@ if [[ "$DO_IPHONE" == 1 ]]; then
   bold "5/5  iPhone app"
   find_iphone() {
     xcrun devicectl list devices --json-output "$BUILD/devices.json" >/dev/null 2>&1 || return 1
-    /usr/bin/python3 - "$BUILD/devices.json" <<'PY'
+    /usr/bin/python3 - "$BUILD/devices.json" "$(cat "$BUILD/iphone-udid" 2>/dev/null)" <<'PY'
 import json, sys
 devices = json.load(open(sys.argv[1])).get("result", {}).get("devices", [])
-best = None
+saved = sys.argv[2].strip() if len(sys.argv) > 2 else ""
+candidates = []
 for d in devices:
     hw = d.get("hardwareProperties", {})
     if hw.get("platform") != "iOS" or hw.get("reality") == "virtual":
         continue
-    state = d.get("connectionProperties", {}).get("tunnelState", "")
+    conn = d.get("connectionProperties", {})
     props = d.get("deviceProperties", {})
-    cand = (state == "connected", hw.get("udid"), props.get("name", "iPhone"),
-            props.get("developerModeStatus", "unknown"))
-    if best is None or cand > best:
-        best = cand
-if best:
-    print(f"{best[1]}\t{best[2]}\t{best[3]}")
+    udid = hw.get("udid") or d.get("identifier", "")
+    candidates.append({
+        "udid": udid,
+        "name": props.get("name", "iPhone"),
+        "devmode": props.get("developerModeStatus", "unknown"),
+        "paired": conn.get("pairingState") == "paired",
+        "connected": conn.get("tunnelState") == "connected",
+        "saved": bool(saved) and udid == saved,
+    })
+# The iPhone Wispen was installed on before always wins. Otherwise only consider iPhones paired
+# with this Mac (other iPhones nearby can show up too, but can't be installed on).
+pick = next((c for c in candidates if c["saved"]), None)
+if pick is None:
+    paired = [c for c in candidates if c["paired"]] or (candidates if not saved else [])
+    paired.sort(key=lambda c: (c["connected"], c["devmode"] == "enabled"), reverse=True)
+    pick = paired[0] if paired else None
+if pick:
+    print(f"{pick['udid']}\t{pick['name']}\t{pick['devmode']}")
 PY
   }
   DEVICE="$(find_iphone || true)"
@@ -270,12 +283,17 @@ PY
   build Wispen "id=$UDID"
   IPA_APP="$BUILD/DerivedData/Build/Products/Release-iphoneos/Wispen.app"
   if ! xcrun devicectl device install app --device "$UDID" "$IPA_APP" >"$BUILD/install.log" 2>&1; then
+    if grep -q "installapp\|Install Application" "$BUILD/install.log"; then
+      [[ "$QUIET" == 1 ]] && fail "$NAME isn't available for installing right now; will try again."
+      fail "$NAME can't receive apps right now. Unlock it (and plug it in if it's the first time), then re-run: $0 --iphone"
+    fi
     if grep -qi "developer mode" "$BUILD/install.log"; then
       fail "Turn on Developer Mode on your iPhone: Settings › Privacy & Security › Developer Mode (it restarts), then re-run."
     fi
     tail -5 "$BUILD/install.log"
     fail "Install failed (full log: $BUILD/install.log)."
   fi
+  echo "$UDID" >"$BUILD/iphone-udid"
   date +%s >"$BUILD/iphone-installed-at"
   git -C "$ROOT" rev-parse HEAD >"$BUILD/iphone-installed-commit" 2>/dev/null || true
   ok "Installed on $NAME"
