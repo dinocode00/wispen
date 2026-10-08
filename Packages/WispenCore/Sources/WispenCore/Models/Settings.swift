@@ -7,18 +7,29 @@ public struct WhisperModelOption: Hashable, Identifiable, Sendable {
     public let detail: String
     public let englishOnly: Bool
 
+    public static let best = "openai_whisper-large-v3-v20240930_turbo_632MB"
+    public static let compact = "openai_whisper-small.en_217MB"
+
     public static let all: [WhisperModelOption] = [
-        .init(id: "openai_whisper-large-v3-v20240930_turbo_632MB", name: "Best",
+        .init(id: best, name: "Best",
               detail: "Large v3 Turbo · 632 MB · any language", englishOnly: false),
-        .init(id: "openai_whisper-small.en", name: "Balanced",
-              detail: "Small · 480 MB · English", englishOnly: true),
-        .init(id: "openai_whisper-small", name: "Balanced (multilingual)",
-              detail: "Small · 480 MB · any language", englishOnly: false),
-        .init(id: "openai_whisper-base.en", name: "Fast",
+        .init(id: compact, name: "Recommended for iPhone",
+              detail: "Small · 217 MB · English · fast, light on memory", englishOnly: true),
+        .init(id: "openai_whisper-small_216MB", name: "Small (multilingual)",
+              detail: "Small · 216 MB · any language", englishOnly: false),
+        .init(id: "openai_whisper-base.en", name: "Fastest",
               detail: "Base · 140 MB · English", englishOnly: true),
     ]
 
-    public static let defaultID = all[0].id
+    /// iPhone: a compact model, because the keyboard flow transcribes while Wispen is in the background,
+    /// where iOS closes apps that use a lot of memory. Mac: the best model.
+    public static var defaultID: String {
+        #if os(iOS)
+        return compact
+        #else
+        return best
+        #endif
+    }
 }
 
 public enum LLMProvider: String, Codable, CaseIterable, Sendable {

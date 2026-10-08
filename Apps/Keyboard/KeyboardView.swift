@@ -172,7 +172,7 @@ private struct VoicePanel: View {
         switch model.state.phase {
         case .recording:
             return model.state.mode == .command ? "Say what to do with the text… tap to finish" : "Listening… tap to finish"
-        case .transcribing: return "Transcribing…"
+        case .transcribing: return model.state.message ?? "Transcribing…"
         case .polishing: return model.state.mode == .command ? "Rewriting…" : "Polishing…"
         default: return "Starting Wispen…"
         }

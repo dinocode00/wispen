@@ -49,8 +49,13 @@ final class DictationEngine: ObservableObject {
         if !capture.isRunning { try capture.start() }
     }
 
+    struct BusyError: LocalizedError {
+        var errorDescription: String? { "Still finishing the last dictation — try again in a moment." }
+    }
+
     func startRecording() throws {
-        guard phase == .idle else { return }
+        if phase == .recording { return }
+        guard phase == .idle else { throw BusyError() }
         try warmUp()
         buffer.begin()
         recordingStartedAt = Date()

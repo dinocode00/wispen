@@ -80,6 +80,11 @@ final class KeyboardModel: ObservableObject {
     // MARK: Lifecycle
 
     func appeared() {
+        // Lets the Wispen app show "keyboard set up ✓" (this write only works with Full Access).
+        try? FlowIPC.keyboardStatusFile.save(KeyboardStatus(hasFullAccess: hasFullAccess))
+        if !hasFullAccess {
+            show("Turn on Allow Full Access so Wispen can dictate: Settings › General › Keyboard › Keyboards › Wispen.", sticky: true)
+        }
         refreshState()
         refreshContext()
         consumeResult()
@@ -112,15 +117,22 @@ final class KeyboardModel: ObservableObject {
             state = .inactive
             return
         }
+        let previous = state.phase
         state = s.isAlive() ? s : .inactive
         if state.phase == .recording || state.phase == .error { waitingSince = nil }
-        if state.phase == .error, let m = state.message { show(m) }
+        if state.phase == .error, let m = state.message { show(m, sticky: true) }
+        // The app vanished mid-dictation (iOS closed it, or it crashed): say so instead of going quiet.
+        if state.phase == .inactive, [.recording, .transcribing, .polishing].contains(previous) {
+            show("Wispen was closed before it finished. Tap 🎤 to start again.", sticky: true)
+        }
     }
 
-    private func show(_ text: String) {
+    /// Sticky messages (errors) stay until you tap a key or the mic.
+    private func show(_ text: String, sticky: Bool = false) {
         message = text
         messageTimer?.invalidate()
-        messageTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: false) { [weak self] _ in
+        guard !sticky else { return }
+        messageTimer = Timer.scheduledTimer(withTimeInterval: 6, repeats: false) { [weak self] _ in
             Task { @MainActor in self?.message = nil }
         }
     }
@@ -148,7 +160,7 @@ final class KeyboardModel: ObservableObject {
 
     private func start(mode: DictationMode) {
         guard hasFullAccess else {
-            show("Turn on Allow Full Access: Settings › General › Keyboard › Keyboards › Wispen.")
+            show("Turn on Allow Full Access: Settings › General › Keyboard › Keyboards › Wispen.", sticky: true)
             return
         }
         let request = FlowRequest(action: .start, mode: mode, styleID: styleID,
@@ -156,7 +168,7 @@ final class KeyboardModel: ObservableObject {
         do {
             try FlowIPC.requestFile.save(request)
         } catch {
-            show("Couldn't reach the Wispen app. Is Allow Full Access on?")
+            show("Couldn't reach the Wispen app. Is Allow Full Access on?", sticky: true)
             return
         }
         lightHaptic()
@@ -198,7 +210,7 @@ final class KeyboardModel: ObservableObject {
         waitingSince = nil
 
         if let error = result.error {
-            show(error)
+            show(error, sticky: true)
             return
         }
         guard let proxy, !result.text.isEmpty else { return }
@@ -235,6 +247,7 @@ final class KeyboardModel: ObservableObject {
     }
 
     func type(_ character: String) {
+        message = nil
         let text = (layer == .letters && shift != .off) ? character.uppercased() : character
         proxy?.insertText(text)
         afterEdit()
