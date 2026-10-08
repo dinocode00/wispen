@@ -14,6 +14,11 @@ final class KeyboardModel: ObservableObject {
     @Published var hasSelection = false
     @Published var message: String?
     @Published var canUndo = false
+    /// A finished dictation that couldn't be typed automatically; the toolbar offers an Insert button.
+    @Published var pendingInsert: String?
+    /// iOS can keep an old, hidden copy of the keyboard alive after you switch apps. Only the copy
+    /// that's on screen may type results, or the text goes into a disconnected text field.
+    private var isVisible = false
     /// Set between tapping the mic and the app confirming it's recording.
     @Published private var waitingSince: Date?
 
@@ -80,6 +85,7 @@ final class KeyboardModel: ObservableObject {
     // MARK: Lifecycle
 
     func appeared() {
+        isVisible = true
         // Lets the Wispen app show "keyboard set up ✓" (this write only works with Full Access).
         try? FlowIPC.keyboardStatusFile.save(KeyboardStatus(hasFullAccess: hasFullAccess))
         if !hasFullAccess {
@@ -100,6 +106,7 @@ final class KeyboardModel: ObservableObject {
     }
 
     func disappeared() {
+        isVisible = false
         poll?.invalidate()
         poll = nil
     }
@@ -202,7 +209,7 @@ final class KeyboardModel: ObservableObject {
 
     /// Insert the finished text for our request, exactly once.
     func consumeResult() {
-        guard let result = FlowIPC.resultFile.load(),
+        guard isVisible, let result = FlowIPC.resultFile.load(),
               let request = FlowIPC.requestFile.load(), request.id == result.requestID,
               defaults.string(forKey: "lastConsumedResult") != result.requestID,
               Date().timeIntervalSince(result.date) < 300 else { return }
@@ -222,12 +229,38 @@ final class KeyboardModel: ObservableObject {
             text = InsertionFormatter.prepare(result.text, before: proxy.documentContextBeforeInput,
                                               after: proxy.documentContextAfterInput, protectedTerms: protectedTerms)
         }
+        insertVerified(text, replacing: result.mode == .command ? selected : nil)
+    }
+
+    /// Types `text`, then checks it really landed. If the host app didn't take it, keep it and show
+    /// an Insert button instead of losing the dictation.
+    private func insertVerified(_ text: String, replacing selected: String?) {
+        guard let proxy else { pendingInsert = text; return }
+        let before = proxy.documentContextBeforeInput
         proxy.insertText(text)
-        lastInsertion = (text, result.mode == .command ? selected : nil)
+        lastInsertion = (text, selected)
         lastAutocorrect = nil
         canUndo = true
+        pendingInsert = nil
         successHaptic()
-        refreshContext()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
+            guard let self, let proxy = self.proxy else { return }
+            let after = proxy.documentContextBeforeInput
+            // nil means the app doesn't share its text (e.g. some web fields): assume it worked.
+            if let after, after == before, !after.hasSuffix(text.trimmingCharacters(in: .whitespaces)) {
+                self.pendingInsert = text
+                self.canUndo = false
+                self.lastInsertion = nil
+            }
+            self.refreshContext()
+        }
+    }
+
+    /// The toolbar's Insert button for a dictation that didn't go in automatically.
+    func insertPending() {
+        guard let text = pendingInsert else { return }
+        pendingInsert = nil
+        insertVerified(text, replacing: nil)
     }
 
     func undo() {
@@ -248,6 +281,7 @@ final class KeyboardModel: ObservableObject {
 
     func type(_ character: String) {
         message = nil
+        pendingInsert = nil
         let text = (layer == .letters && shift != .off) ? character.uppercased() : character
         proxy?.insertText(text)
         afterEdit()
