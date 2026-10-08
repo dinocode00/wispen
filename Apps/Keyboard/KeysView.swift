@@ -3,7 +3,7 @@ import UIKit
 import WispenCore
 
 /// One key on the QWERTY keyboard.
-struct KeySpec: Identifiable {
+struct KeySpec: Identifiable, Equatable {
     enum Kind: Equatable {
         case character(String)
         case shift
@@ -70,75 +70,88 @@ enum KeyboardLayout {
     }
 }
 
+/// Which keys are held (and which are still fading out their touch effect). Drawn by `KeyCell`.
+@MainActor
+final class KeyPressState: ObservableObject {
+    @Published var down: Set<String> = []
+    @Published var lit: Set<String> = []
+}
+
 struct KeysView: View {
     @ObservedObject var model: KeyboardModel
-    let globeKey: GlobeKey
 
     var body: some View {
         GeometryReader { geo in
             let rows = KeyboardLayout.rows(for: model.layer, globe: model.needsGlobeKey)
             let unit = geo.size.width / 10
             let rowHeight = geo.size.height / CGFloat(rows.count)
-            VStack(spacing: 0) {
-                ForEach(Array(rows.enumerated()), id: \.offset) { index, row in
-                    HStack(spacing: 0) {
-                        // The middle letter row is inset by half a key; widen its outer keys' touch areas instead.
-                        let rowUnits = row.reduce(0) { $0 + $1.width }
-                        let slack = max(0, 10 - rowUnits) / 2
-                        ForEach(Array(row.enumerated()), id: \.element.id) { i, key in
-                            let extra = (i == 0 || i == row.count - 1) ? slack : 0
-                            KeyCell(model: model, key: key, globeKey: globeKey,
-                                    width: (key.width + extra) * unit, height: rowHeight,
-                                    visualWidth: key.width * unit,
-                                    alignment: i == 0 && extra > 0 ? .trailing : (i == row.count - 1 && extra > 0 ? .leading : .center))
+            ZStack(alignment: .topLeading) {
+                VStack(spacing: 0) {
+                    ForEach(Array(rows.enumerated()), id: \.offset) { index, row in
+                        HStack(spacing: 0) {
+                            // The middle letter row is inset by half a key; its outer keys' touch areas are widened instead.
+                            let slack = Self.slack(row)
+                            ForEach(Array(row.enumerated()), id: \.element.id) { i, key in
+                                let extra = (i == 0 || i == row.count - 1) ? slack : 0
+                                KeyCell(model: model, presses: model.presses, key: key,
+                                        width: (key.width + extra) * unit, height: rowHeight,
+                                        visualWidth: key.width * unit,
+                                        alignment: i == 0 && extra > 0 ? .trailing : (i == row.count - 1 && extra > 0 ? .leading : .center))
+                            }
                         }
+                        .zIndex(Double(index))
                     }
-                    .zIndex(Double(index))
                 }
+                // One touch handler for the whole keyboard, so fast, overlapping taps are never lost.
+                KeyTouchSurface(model: model, keys: Self.cells(rows, unit: unit, rowHeight: rowHeight))
             }
         }
         .padding(.horizontal, 2)
         .padding(.bottom, 2)
     }
+
+    static func slack(_ row: [KeySpec]) -> CGFloat {
+        max(0, 10 - row.reduce(0) { $0 + $1.width }) / 2
+    }
+
+    /// Every key's touch area (the full cell, so the gaps between keys count too).
+    static func cells(_ rows: [[KeySpec]], unit: CGFloat, rowHeight: CGFloat) -> [(spec: KeySpec, frame: CGRect)] {
+        var out: [(KeySpec, CGRect)] = []
+        for (r, row) in rows.enumerated() {
+            let slack = slack(row)
+            var x: CGFloat = 0
+            for (i, key) in row.enumerated() {
+                let w = (key.width + ((i == 0 || i == row.count - 1) ? slack : 0)) * unit
+                out.append((key, CGRect(x: x, y: CGFloat(r) * rowHeight, width: w, height: rowHeight)))
+                x += w
+            }
+        }
+        return out
+    }
 }
 
-/// A key's touch area (the whole cell, so gaps between keys still register) and its visible cap.
+/// A key's visible cap. Touches are handled by `KeyTouchSurface`.
 struct KeyCell: View {
     @ObservedObject var model: KeyboardModel
+    @ObservedObject var presses: KeyPressState
     let key: KeySpec
-    let globeKey: GlobeKey
     let width: CGFloat
     let height: CGFloat
     let visualWidth: CGFloat
     let alignment: Alignment
 
     @Environment(\.keyPalette) private var palette
-    @State private var pressed = false
-    /// Stays on briefly after release so the effect's glow fades out.
-    @State private var lit = false
-    @State private var touchID = UUID()
-    @State private var repeatTimer: Timer?
-    @State private var repeats = 0
-    @State private var dragOrigin: CGFloat?
-    @State private var movedCursor = false
+
+    private var pressed: Bool { presses.down.contains(key.id) }
+    private var lit: Bool { presses.lit.contains(key.id) }
 
     var body: some View {
-        Group {
-            if key.kind == .globe {
-                globeKey
-                    .frame(width: visualWidth - 6, height: height - 10)
-                    .frame(width: width, height: height)
-            } else {
-                cap
-                    .frame(width: visualWidth - 6, height: height - 10)
-                    .frame(width: width, height: height, alignment: alignment)
-                    .contentShape(Rectangle())
-                    .gesture(gesture)
-            }
-        }
-        .accessibilityElement()
-        .accessibilityLabel(accessibilityLabel)
-        .accessibilityAddTraits(.isKeyboardKey)
+        cap
+            .frame(width: visualWidth - 6, height: height - 10)
+            .frame(width: width, height: height, alignment: alignment)
+            .accessibilityElement()
+            .accessibilityLabel(accessibilityLabel)
+            .accessibilityAddTraits(.isKeyboardKey)
     }
 
     // MARK: Appearance
@@ -209,7 +222,7 @@ struct KeyCell: View {
                 Image(systemName: "return").font(.system(size: 18))
             }
         case .globe:
-            EmptyView()
+            Image(systemName: "globe").font(.system(size: 18))
         }
     }
 
@@ -224,89 +237,194 @@ struct KeyCell: View {
         case .returnKey: return model.returnKeyLabel ?? "Return"
         }
     }
+}
 
-    // MARK: Behaviour
+// MARK: - Touch handling
 
-    private var gesture: some Gesture {
-        DragGesture(minimumDistance: 0, coordinateSpace: .named(KeyEffectsEngine.space))
-            .onChanged { value in
-                if !pressed {
-                    pressed = true
-                    lit = true
-                    touchID = UUID()
-                    model.effects.began(touchID, at: value.location, keySize: CGSize(width: visualWidth, height: height),
-                                        isDelete: key.kind == .delete)
-                    touchDown()
-                } else {
-                    model.effects.moved(touchID, to: value.location)
-                }
-                if key.kind == .space { trackpad(value.translation.width) }
-            }
-            .onEnded { _ in
-                pressed = false
-                withAnimation(.easeOut(duration: 0.5)) { lit = false }
-                model.effects.ended(touchID)
-                touchUp()
-            }
+struct KeyTouchSurface: UIViewRepresentable {
+    let model: KeyboardModel
+    let keys: [(spec: KeySpec, frame: CGRect)]
+
+    func makeUIView(context: Context) -> KeyTouchView {
+        let v = KeyTouchView()
+        v.model = model
+        v.keys = keys
+        return v
     }
 
-    private func touchDown() {
+    func updateUIView(_ uiView: KeyTouchView, context: Context) {
+        uiView.model = model
+        uiView.keys = keys
+    }
+}
+
+/// Handles every finger on the keyboard in one place, like the system keyboard:
+/// - the key is chosen where the finger lands (gaps between keys go to the nearest key);
+/// - a key is typed when its finger lifts, or as soon as the next finger lands (fast typists overlap taps);
+/// - a touch iOS cancels is still typed.
+final class KeyTouchView: UIView {
+    weak var model: KeyboardModel?
+    var keys: [(spec: KeySpec, frame: CGRect)] = []
+
+    private struct Touch {
+        let spec: KeySpec
+        let effectID = UUID()
+        let startX: CGFloat
+        var cursorOrigin: CGFloat = 0
+        var movedCursor = false
+    }
+
+    private var tracker = KeyTouchTracker<ObjectIdentifier, KeySpec>()
+    private var touches: [ObjectIdentifier: Touch] = [:]
+    private var globeTouches: Set<ObjectIdentifier> = []
+    private var repeatTimer: Timer?
+    private var repeatTouch: ObjectIdentifier?
+    private var repeats = 0
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        isMultipleTouchEnabled = true
+        backgroundColor = .clear
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        guard let model else { return }
+        for touch in touches.sorted(by: { $0.timestamp < $1.timestamp }) {
+            let id = ObjectIdentifier(touch)
+            let point = touch.location(in: self)
+            guard let index = KeyHitTest.index(of: point, in: keys.map(\.frame)) else { continue }
+            let spec = keys[index].spec
+
+            if spec.kind == .globe {
+                globeTouches.insert(id)
+                model.handleInputModeList(from: self, with: event)
+                continue
+            }
+
+            // Type any key still held from the previous tap before handling this one.
+            let rollsOver: Bool
+            switch spec.kind {
+            case .character, .space: rollsOver = true
+            default: rollsOver = false
+            }
+            for earlier in tracker.begin(id, key: spec, rollsOver: rollsOver) { commit(earlier) }
+
+            self.touches[id] = Touch(spec: spec, startX: point.x)
+            model.presses.down.insert(spec.id)
+            model.presses.lit.insert(spec.id)
+            let canvasPoint = model.effects.canvas.map { touch.location(in: $0) } ?? point
+            model.effects.began(self.touches[id]!.effectID, at: canvasPoint, keySize: keys[index].frame.size,
+                                isDelete: spec.kind == .delete)
+            pressed(spec, touch: id)
+        }
+    }
+
+    override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
+        guard let model else { return }
+        for touch in touches {
+            let id = ObjectIdentifier(touch)
+            if globeTouches.contains(id) {
+                model.handleInputModeList(from: self, with: event)
+                continue
+            }
+            guard var t = self.touches[id] else { continue }
+            if let canvas = model.effects.canvas { model.effects.moved(t.effectID, to: touch.location(in: canvas)) }
+            if t.spec.kind == .space {
+                // Drag on the space bar to move the cursor, like the system keyboard.
+                let step: CGFloat = 9
+                let delta = touch.location(in: self).x - t.startX - t.cursorOrigin
+                if abs(delta) >= step {
+                    let chars = Int(delta / step)
+                    model.moveCursor(by: chars)
+                    t.cursorOrigin += CGFloat(chars) * step
+                    if !t.movedCursor {
+                        t.movedCursor = true
+                        tracker.suppress(id)
+                    }
+                }
+                self.touches[id] = t
+            }
+        }
+    }
+
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
+        finish(touches, event: event)
+    }
+
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
+        // Still typed: iOS cancels touches for its own reasons, not because you didn't mean the key.
+        finish(touches, event: event)
+    }
+
+    private func finish(_ touches: Set<UITouch>, event: UIEvent?) {
+        guard let model else { return }
+        for touch in touches.sorted(by: { $0.timestamp < $1.timestamp }) {
+            let id = ObjectIdentifier(touch)
+            if globeTouches.remove(id) != nil {
+                model.handleInputModeList(from: self, with: event)
+                continue
+            }
+            guard let t = self.touches.removeValue(forKey: id) else { continue }
+            if let key = tracker.end(id) { commit(key) }
+            if repeatTouch == id { stopRepeating() }
+            if !self.touches.values.contains(where: { $0.spec.id == t.spec.id }) {
+                model.presses.down.remove(t.spec.id)
+                withAnimation(.easeOut(duration: 0.5)) { _ = model.presses.lit.remove(t.spec.id) }
+            }
+            model.effects.ended(t.effectID)
+        }
+    }
+
+    /// What happens the moment a key goes down.
+    private func pressed(_ spec: KeySpec, touch: ObjectIdentifier) {
+        guard let model else { return }
         model.keyDown()
-        switch key.kind {
+        switch spec.kind {
         case .shift:
             model.shiftTapped()
         case .delete:
             model.deleteBackward()
+            stopRepeating()
+            repeatTouch = touch
             repeats = 0
-            repeatTimer?.invalidate()
-            repeatTimer = Timer.scheduledTimer(withTimeInterval: 0.45, repeats: false) { _ in
-                Task { @MainActor in startRepeating() }
+            repeatTimer = Timer.scheduledTimer(withTimeInterval: 0.45, repeats: false) { [weak self] _ in
+                Task { @MainActor in self?.startRepeating() }
             }
-        case .space:
-            dragOrigin = nil
-            movedCursor = false
         default:
             break
         }
     }
 
     private func startRepeating() {
-        guard pressed else { return }
-        repeatTimer = Timer.scheduledTimer(withTimeInterval: 0.09, repeats: true) { _ in
+        guard repeatTouch != nil else { return }
+        repeatTimer = Timer.scheduledTimer(withTimeInterval: 0.09, repeats: true) { [weak self] _ in
             Task { @MainActor in
-                guard pressed else { repeatTimer?.invalidate(); return }
-                repeats += 1
+                guard let self, self.repeatTouch != nil, let model = self.model else { return }
+                self.repeats += 1
                 // After about a second of holding, delete whole words.
-                if repeats > 12 { model.deleteWordBackward() } else { model.deleteBackward() }
+                if self.repeats > 12 { model.deleteWordBackward() } else { model.deleteBackward() }
             }
         }
     }
 
-    private func touchUp() {
+    private func stopRepeating() {
         repeatTimer?.invalidate()
         repeatTimer = nil
-        switch key.kind {
+        repeatTouch = nil
+    }
+
+    /// What a key types (on release, or early on rollover).
+    private func commit(_ spec: KeySpec) {
+        guard let model else { return }
+        switch spec.kind {
         case .character(let c): model.type(c)
-        case .space: if !movedCursor { model.space() }
+        case .space: model.space()
         case .returnKey: model.newline()
         case .layer: model.toggleLayer()
         case .symbols: model.toggleSymbols()
         case .shift, .delete, .globe: break
         }
-    }
-
-    /// Drag on the space bar to move the cursor, like the system keyboard.
-    private func trackpad(_ x: CGFloat) {
-        let step: CGFloat = 9
-        guard let origin = dragOrigin else {
-            dragOrigin = x
-            return
-        }
-        let delta = x - origin
-        guard abs(delta) >= step else { return }
-        let chars = Int(delta / step)
-        model.moveCursor(by: chars)
-        dragOrigin = origin + CGFloat(chars) * step
-        movedCursor = true
     }
 }
