@@ -35,6 +35,7 @@ final class KeyboardModel: ObservableObject {
     /// Look and touch effects; changes in the Wispen app apply right away.
     @Published private(set) var theme: KeyboardTheme
     let effects = KeyEffectsEngine()
+    let presses = KeyPressState()
     private let store = WispenStore()
     private weak var controller: KeyboardViewController?
     private var poll: Timer?
@@ -77,6 +78,12 @@ final class KeyboardModel: ObservableObject {
     var proxy: UITextDocumentProxy? { controller?.textDocumentProxy }
     var hasFullAccess: Bool { controller?.hasFullAccess ?? false }
     var needsGlobeKey: Bool { controller?.needsInputModeSwitchKey ?? true }
+
+    /// The globe key: tap for the next keyboard, hold for the list.
+    func handleInputModeList(from view: UIView, with event: UIEvent?) {
+        guard let event else { return }
+        controller?.handleInputModeList(from: view, with: event)
+    }
     var style: DictationStyle { styles.first { $0.id == styleID } ?? .polished }
 
     /// The voice panel replaces the keys while Wispen is listening or writing.

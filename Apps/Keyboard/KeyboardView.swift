@@ -5,7 +5,6 @@ import WispenCore
 /// While Wispen is listening or writing, a voice panel replaces the keys.
 struct KeyboardView: View {
     @ObservedObject var model: KeyboardModel
-    let globeKey: GlobeKey
 
     var body: some View {
         let palette = KeyPalette.make(model.theme)
@@ -20,7 +19,7 @@ struct KeyboardView: View {
                     } else if model.showStyles {
                         StylesPanel(model: model)
                     } else {
-                        KeysView(model: model, globeKey: globeKey)
+                        KeysView(model: model)
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)

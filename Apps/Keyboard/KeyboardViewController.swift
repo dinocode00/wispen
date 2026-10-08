@@ -12,7 +12,7 @@ final class KeyboardViewController: UIInputViewController {
         super.viewDidLoad()
         model = KeyboardModel(controller: self)
 
-        let host = UIHostingController(rootView: KeyboardView(model: model, globeKey: makeGlobeKey()))
+        let host = UIHostingController(rootView: KeyboardView(model: model))
         host.view.backgroundColor = .clear
         host.view.translatesAutoresizingMaskIntoConstraints = false
         addChild(host)
@@ -37,6 +37,13 @@ final class KeyboardViewController: UIInputViewController {
         model.appeared()
     }
 
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        // iOS holds back touches near the screen edges (for its own swipe gestures), so a quick tap on the
+        // bottom row could arrive late or out of order. Keys need every touch immediately.
+        view.window?.gestureRecognizers?.forEach { $0.delaysTouchesBegan = false }
+    }
+
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
         model.disappeared()
@@ -50,11 +57,6 @@ final class KeyboardViewController: UIInputViewController {
     override func selectionDidChange(_ textInput: UITextInput?) {
         super.selectionDidChange(textInput)
         model.refreshContext()
-    }
-
-    /// The system globe key (switch keyboards; long-press for the list).
-    private func makeGlobeKey() -> GlobeKey {
-        GlobeKey(controller: self)
     }
 
     /// Keyboard extensions can't call `UIApplication.shared.open`, but the host app's UIApplication
@@ -74,31 +76,5 @@ final class KeyboardViewController: UIInputViewController {
             responder = r.next
         }
         model.message = "Open the Wispen app to start a session."
-    }
-}
-
-/// Wraps a UIButton so it can use `handleInputModeList(from:with:)` (tap = next keyboard, hold = list).
-struct GlobeKey: UIViewRepresentable {
-    weak var controller: UIInputViewController?
-
-    func makeUIView(context: Context) -> UIButton {
-        let button = UIButton(type: .system)
-        button.setImage(UIImage(systemName: "globe"), for: .normal)
-        button.tintColor = .label
-        button.backgroundColor = UIColor.secondarySystemBackground
-        button.layer.cornerRadius = 8
-        if let controller {
-            button.addTarget(controller, action: #selector(UIInputViewController.handleInputModeList(from:with:)), for: .allTouchEvents)
-        }
-        return button
-    }
-
-    func updateUIView(_ uiView: UIButton, context: Context) {
-        let palette = context.environment.keyPalette
-        uiView.tintColor = UIColor(palette.text)
-        uiView.backgroundColor = palette.softShadow ? UIColor.secondarySystemBackground : UIColor(palette.mod)
-        uiView.layer.cornerRadius = palette.radius
-        uiView.layer.borderColor = palette.border.map { UIColor($0).cgColor }
-        uiView.layer.borderWidth = palette.border == nil ? 0 : (palette.weight == .thin ? 0.75 : 1)
     }
 }
