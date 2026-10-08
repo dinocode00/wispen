@@ -71,6 +71,7 @@ public struct WispenSettings: Codable, Equatable, Sendable {
     public var appStyleOverrides: [String: String] = [:]
 
     /// iOS: keep the background "flow session" alive this long after the last dictation.
+    /// 0 = keep the session on until you end it (or iOS closes Wispen).
     public var sessionTimeoutMinutes: Int = 15
     public var keepHistory: Bool = true
     public var historyLimit: Int = 500
