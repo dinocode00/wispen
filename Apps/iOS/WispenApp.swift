@@ -1,3 +1,4 @@
+import AppIntents
 import SwiftUI
 import WispenCore
 
@@ -11,6 +12,7 @@ struct WispenApp: App {
     init() {
         // Buttons in the Dynamic Island / Lock Screen run these inside the app.
         WispenActivityActions.endFlowSession = { FlowSessionController.shared.endSession() }
+        WispenActivityActions.startFlowSession = { await FlowSessionController.shared.startSession() }
         WispenActivityActions.stopMeeting = { Task { await MeetingRecorder.shared.stop() } }
         LiveActivityController.shared.endStaleActivities()
         SpeakerReviewStore.purgeExpired()
@@ -110,7 +112,7 @@ struct SwipeBackView: View {
 
             VStack(spacing: 10) {
                 Text(title).font(.title2.weight(.semibold))
-                Text("Go back to your app and keep talking. Tap the Wispen mic again when you're done.\nFrom now on the keyboard works without coming here, until the session ends after \(flow.app.settings.sessionTimeoutMinutes) idle minutes.")
+                Text("Go back to your app and keep talking. Tap the Wispen mic again when you're done.\nFrom now on the keyboard works without coming here, until the session ends.\n\nTip: add “Start Wispen” to Control Center or the Action Button (Wispen › Flow tab) to skip this screen.")
                     .multilineTextAlignment(.center)
                     .foregroundStyle(.secondary)
                     .padding(.horizontal, 32)
@@ -133,5 +135,14 @@ struct SwipeBackView: View {
         case .error: return flow.state.message ?? "Something went wrong"
         default: return "Wispen is ready"
         }
+    }
+}
+
+/// "Hey Siri, start Wispen", and the action Shortcuts automations use.
+struct WispenShortcuts: AppShortcutsProvider {
+    static var appShortcuts: [AppShortcut] {
+        AppShortcut(intent: StartFlowSessionIntent(),
+                    phrases: ["Start \(.applicationName)", "Start \(.applicationName) session"],
+                    shortTitle: "Start Wispen", systemImageName: "waveform")
     }
 }

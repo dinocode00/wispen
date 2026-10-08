@@ -33,6 +33,8 @@ struct WispenActivityAttributes: ActivityAttributes {
 @MainActor
 enum WispenActivityActions {
     static var endFlowSession: (() -> Void)?
+    /// Starts the flow session (mic ready for the keyboard) — set by the app.
+    static var startFlowSession: (@MainActor () async -> Void)?
     static var stopMeeting: (() -> Void)?
 }
 
@@ -56,6 +58,24 @@ struct StopMeetingIntent: LiveActivityIntent {
 
     func perform() async throws -> some IntentResult {
         await MainActor.run { WispenActivityActions.stopMeeting?() }
+        return .result()
+    }
+}
+
+/// Starts a Wispen flow session WITHOUT opening the app: from Control Center, the Action Button, the
+/// Lock Screen or a Shortcuts automation ("When I open Messages → Start Wispen"). iOS lets audio
+/// recording intents start the microphone in the background, as long as a Live Activity is shown —
+/// Wispen's session Live Activity starts with it.
+struct StartFlowSessionIntent: AudioRecordingIntent {
+    static let title: LocalizedStringResource = "Start Wispen"
+    static let description = IntentDescription("Gets Wispen listening-ready so the keyboard can dictate without opening the app.")
+    static let openAppWhenRun = false
+
+    init() {}
+
+    func perform() async throws -> some IntentResult {
+        let start = await MainActor.run { WispenActivityActions.startFlowSession }
+        await start?()
         return .result()
     }
 }

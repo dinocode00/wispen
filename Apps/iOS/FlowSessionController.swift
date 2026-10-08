@@ -81,7 +81,8 @@ final class FlowSessionController: ObservableObject {
     }
 
     private func bumpIdle() {
-        idleDeadline = Date().addingTimeInterval(TimeInterval(max(1, app.settings.sessionTimeoutMinutes) * 60))
+        let minutes = app.settings.sessionTimeoutMinutes
+        idleDeadline = minutes <= 0 ? .distantFuture : Date().addingTimeInterval(TimeInterval(minutes * 60))
     }
 
     // MARK: Requests from the keyboard
@@ -196,7 +197,7 @@ final class FlowSessionController: ObservableObject {
             requestID: requestID ?? (phase == .ready || phase == .inactive ? nil : state.requestID),
             message: message,
             heartbeat: Date(),
-            sessionEndsAt: phase == .inactive ? nil : idleDeadline)
+            sessionEndsAt: phase == .inactive || idleDeadline == .distantFuture ? nil : idleDeadline)
         try? FlowIPC.stateFile.save(state)
         DarwinNotifier.shared.post(.state)
         LiveActivityController.shared.updateFlow(state, recordingStartedAt: engine.recordingStartedAt)

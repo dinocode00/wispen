@@ -13,6 +13,7 @@ struct HomeView: View {
     var body: some View {
         List {
             sessionSection
+            skipTheTripSection
             TryItSection(engine: flow.engine)
             setupSection
             lastDictationSection
@@ -45,13 +46,46 @@ struct HomeView: View {
                 .buttonStyle(.bordered)
             }
             .padding(.vertical, 4)
-            Stepper("End session after \(app.settings.sessionTimeoutMinutes) idle min",
-                    value: $app.settings.sessionTimeoutMinutes, in: 1...120, step: app.settings.sessionTimeoutMinutes < 10 ? 1 : 5)
-                .font(.callout)
+            Picker("Keep session on", selection: $app.settings.sessionTimeoutMinutes) {
+                Text("5 idle minutes").tag(5)
+                Text("15 idle minutes").tag(15)
+                Text("1 idle hour").tag(60)
+                Text("4 idle hours").tag(240)
+                Text("Until I end it").tag(0)
+            }
+            .font(.callout)
         } header: {
             Text("Flow session")
         } footer: {
             Text("While a session is active, the Wispen keyboard can dictate into any app. iOS shows an orange mic dot, but Wispen only records while you're dictating.")
+        }
+    }
+
+    /// iOS only lets an app turn the mic on while it's on screen — except through these system
+    /// buttons and automations, which can start Wispen in the background.
+    private var skipTheTripSection: some View {
+        Section {
+            howTo("switch.2", "Control Center",
+                  "Swipe down from the top-right › + › Add a Control › search “Wispen” › Start Wispen.")
+            howTo("button.horizontal.top.press", "Action Button",
+                  "Settings › Action Button › Controls › Start Wispen.")
+            howTo("wand.and.rays", "Automatically",
+                  "Shortcuts › Automation › + › App › choose Messages (and any others) › Is Opened › Run Immediately › Next › Start Wispen.")
+            howTo("mic", "Siri", "“Hey Siri, start Wispen.”")
+        } header: {
+            Text("Start without opening Wispen")
+        } footer: {
+            Text("iOS only lets an app turn on the microphone from the screen — that's why the keyboard sends you here the first time. These start the session in the background instead, so the keyboard mic just works.")
+        }
+    }
+
+    private func howTo(_ icon: String, _ title: String, _ detail: String) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: icon).foregroundStyle(Color.wispenAccent).frame(width: 24)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.subheadline.weight(.semibold))
+                Text(detail).font(.caption).foregroundStyle(.secondary)
+            }
         }
     }
 

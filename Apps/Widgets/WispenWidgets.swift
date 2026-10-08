@@ -7,6 +7,20 @@ import WidgetKit
 struct WispenWidgetBundle: WidgetBundle {
     var body: some Widget {
         WispenLiveActivity()
+        WispenSessionControl()
+    }
+}
+
+/// Control Center / Lock Screen / Action Button: start Wispen without opening the app.
+struct WispenSessionControl: ControlWidget {
+    var body: some ControlWidgetConfiguration {
+        StaticControlConfiguration(kind: "app.wispen.start-session") {
+            ControlWidgetButton(action: StartFlowSessionIntent()) {
+                Label("Start Wispen", systemImage: "waveform")
+            }
+        }
+        .displayName("Start Wispen")
+        .description("Gets Wispen ready so the keyboard dictates without opening the app.")
     }
 }
 
