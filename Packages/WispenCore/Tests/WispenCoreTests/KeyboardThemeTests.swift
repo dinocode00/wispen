@@ -20,9 +20,9 @@ final class KeyboardThemeTests: XCTestCase {
     }
 
     func testOldSettingsFileWithoutThemeStillLoads() throws {
-        let json = #"{"keyboardHaptics": false}"#.data(using: .utf8)!
+        let json = #"{"keyboardHaptics": false, "keyboardSounds": true}"#.data(using: .utf8)!
         let s = try JSONDecoder().decode(WispenSettings.self, from: json)
-        XCTAssertFalse(s.keyboardHaptics)
+        XCTAssertTrue(s.keyboardSounds)
         XCTAssertEqual(s.keyboardTheme, KeyboardTheme())
     }
 

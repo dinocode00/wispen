@@ -191,7 +191,6 @@ final class KeyboardModel: ObservableObject {
             show("Couldn't reach the Wispen app. Is Allow Full Access on?", sticky: true)
             return
         }
-        lightHaptic()
         waitingSince = Date()
         if state.isAlive() {
             DarwinNotifier.shared.post(.request)
@@ -207,7 +206,6 @@ final class KeyboardModel: ObservableObject {
         stop.date = Date()
         try? FlowIPC.requestFile.save(stop)
         DarwinNotifier.shared.post(.request)
-        lightHaptic()
     }
 
     func cancel() {
@@ -255,7 +253,6 @@ final class KeyboardModel: ObservableObject {
         lastAutocorrect = nil
         canUndo = true
         pendingInsert = nil
-        successHaptic()
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
             guard let self, let proxy = self.proxy else { return }
             let after = proxy.documentContextBeforeInput
@@ -288,7 +285,6 @@ final class KeyboardModel: ObservableObject {
     // MARK: Typing
 
     func keyDown() {
-        if settings.keyboardHaptics { lightHaptic() }
         if settings.keyboardSounds, hasFullAccess { AudioServicesPlaySystemSound(1104) }
     }
 
@@ -457,17 +453,5 @@ final class KeyboardModel: ObservableObject {
         case .emergencyCall: return "call"
         default: return nil
         }
-    }
-
-    // MARK: Haptics (only work with Full Access)
-
-    private func lightHaptic() {
-        guard hasFullAccess else { return }
-        UIImpactFeedbackGenerator(style: .light).impactOccurred()
-    }
-
-    private func successHaptic() {
-        guard hasFullAccess else { return }
-        UINotificationFeedbackGenerator().notificationOccurred(.success)
     }
 }

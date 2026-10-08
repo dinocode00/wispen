@@ -279,12 +279,11 @@ struct SettingsView: View {
                 Toggle("Suggestions", isOn: $app.settings.keyboardSuggestions)
                 Toggle("Auto-capitalization", isOn: $app.settings.keyboardAutoCapitalize)
                 Toggle("“.” shortcut (double-tap space)", isOn: $app.settings.keyboardDoubleSpacePeriod)
-                Toggle("Haptic feedback", isOn: $app.settings.keyboardHaptics)
                 Toggle("Key click sounds", isOn: $app.settings.keyboardSounds)
             } header: {
                 Text("Wispen keyboard")
             } footer: {
-                Text("Changes apply the next time the keyboard opens. Haptics and sounds need Allow Full Access. Drag the space bar to move the cursor; backspace right after an autocorrection undoes it.")
+                Text("Changes apply the next time the keyboard opens. Key click sounds need Allow Full Access. Drag the space bar to move the cursor; backspace right after an autocorrection undoes it.")
             }
             Section {
                 Toggle("Dynamic Island & Lock Screen", isOn: $app.settings.liveActivities)
