@@ -11,6 +11,7 @@ struct KeySpec: Identifiable, Equatable {
         case layer(String)   // "123" / "ABC"
         case symbols(String) // "#+=" / "123" on the symbols row
         case globe
+        case emoji
         case space
         case returnKey
     }
@@ -41,8 +42,9 @@ enum KeyboardLayout {
         let bottomLeft: KeySpec = layer == .letters ? KeySpec(.layer("123"), width: 1.25) : KeySpec(.layer("ABC"), width: 1.25)
         var bottom = [bottomLeft]
         if globe { bottom.append(KeySpec(.globe, width: 1.25)) }
-        bottom.append(KeySpec(.space, width: globe ? 5.25 : 6.5))
-        bottom.append(KeySpec(.returnKey, width: 2.25))
+        bottom.append(KeySpec(.emoji, width: 1.25))
+        bottom.append(KeySpec(.space, width: globe ? 4.25 : 5.25))
+        bottom.append(KeySpec(.returnKey, width: 2))
 
         switch layer {
         case .letters:
@@ -223,6 +225,8 @@ struct KeyCell: View {
             }
         case .globe:
             Image(systemName: "globe").font(.system(size: 18))
+        case .emoji:
+            Image(systemName: "face.smiling").font(.system(size: 19))
         }
     }
 
@@ -233,6 +237,7 @@ struct KeyCell: View {
         case .delete: return "Delete"
         case .layer(let l), .symbols(let l): return l == "123" ? "Numbers" : (l == "ABC" ? "Letters" : "Symbols")
         case .globe: return "Next keyboard"
+        case .emoji: return "Emoji"
         case .space: return "Space"
         case .returnKey: return model.returnKeyLabel ?? "Return"
         }
@@ -261,17 +266,24 @@ struct KeyTouchSurface: UIViewRepresentable {
 /// Handles every finger on the keyboard in one place, like the system keyboard:
 /// - the key is chosen where the finger lands (gaps between keys go to the nearest key);
 /// - a key is typed when its finger lifts, or as soon as the next finger lands (fast typists overlap taps);
-/// - a touch iOS cancels is still typed.
+/// - a touch iOS cancels is still typed;
+/// - one finger sliding across the letters types a word (swipe typing).
 final class KeyTouchView: UIView {
     weak var model: KeyboardModel?
-    var keys: [(spec: KeySpec, frame: CGRect)] = []
+    var keys: [(spec: KeySpec, frame: CGRect)] = [] {
+        didSet { updateDecoder() }
+    }
 
     private struct Touch {
         let spec: KeySpec
         let effectID = UUID()
-        let startX: CGFloat
+        let start: CGPoint
         var cursorOrigin: CGFloat = 0
         var movedCursor = false
+        /// Could still become a swipe: a letter, touched while no other finger is down.
+        var canSwipe: Bool
+        var swiping = false
+        var path: [CGPoint] = []
     }
 
     private var tracker = KeyTouchTracker<ObjectIdentifier, KeySpec>()
@@ -281,10 +293,23 @@ final class KeyTouchView: UIView {
     private var repeatTouch: ObjectIdentifier?
     private var repeats = 0
 
+    // Swipe typing
+    private var decoder: SwipeDecoder?
+    private var decoderLayout: [CGRect] = []
+    private var keyUnit: CGFloat = 0
+    private var swipeTouch: ObjectIdentifier?
+    private let trail = CAShapeLayer()
+
     override init(frame: CGRect) {
         super.init(frame: frame)
         isMultipleTouchEnabled = true
         backgroundColor = .clear
+        trail.fillColor = nil
+        trail.lineWidth = 5
+        trail.lineCap = .round
+        trail.lineJoin = .round
+        trail.opacity = 0
+        layer.addSublayer(trail)
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
@@ -294,6 +319,8 @@ final class KeyTouchView: UIView {
         for touch in touches.sorted(by: { $0.timestamp < $1.timestamp }) {
             let id = ObjectIdentifier(touch)
             let point = touch.location(in: self)
+            // While a swipe is under way, other fingers are ignored.
+            if swipeTouch != nil { continue }
             guard let index = KeyHitTest.index(of: point, in: keys.map(\.frame)) else { continue }
             let spec = keys[index].spec
 
@@ -311,7 +338,14 @@ final class KeyTouchView: UIView {
             }
             for earlier in tracker.begin(id, key: spec, rollsOver: rollsOver) { commit(earlier) }
 
-            self.touches[id] = Touch(spec: spec, startX: point.x)
+            var isLetter = false
+            if case .character = spec.kind { isLetter = model.layer == .letters }
+            let alone = self.touches.isEmpty
+            // A second finger means tapping, not swiping.
+            for key in self.touches.keys { self.touches[key]?.canSwipe = false }
+            self.touches[id] = Touch(spec: spec, start: point,
+                                     canSwipe: alone && isLetter && model.swipeTyping && decoder != nil,
+                                     path: [point])
             model.presses.down.insert(spec.id)
             model.presses.lit.insert(spec.id)
             let canvasPoint = model.effects.canvas.map { touch.location(in: $0) } ?? point
@@ -331,10 +365,24 @@ final class KeyTouchView: UIView {
             }
             guard var t = self.touches[id] else { continue }
             if let canvas = model.effects.canvas { model.effects.moved(t.effectID, to: touch.location(in: canvas)) }
-            if t.spec.kind == .space {
+            if t.canSwipe {
+                for c in event?.coalescedTouches(for: touch) ?? [touch] { t.path.append(c.location(in: self)) }
+                let p = touch.location(in: self)
+                if !t.swiping, hypot(p.x - t.start.x, p.y - t.start.y) >= keyUnit * SwipeDecoder.swipeThreshold,
+                   let i = KeyHitTest.index(of: p, in: keys.map(\.frame)), keys[i].spec.id != t.spec.id {
+                    // The finger left its key: this is a swipe, so the first letter isn't typed on its own.
+                    t.swiping = true
+                    swipeTouch = id
+                    tracker.suppress(id)
+                    model.presses.down.remove(t.spec.id)
+                    startTrail()
+                }
+                if t.swiping { drawTrail(t.path) }
+                self.touches[id] = t
+            } else if t.spec.kind == .space {
                 // Drag on the space bar to move the cursor, like the system keyboard.
                 let step: CGFloat = 9
-                let delta = touch.location(in: self).x - t.startX - t.cursorOrigin
+                let delta = touch.location(in: self).x - t.start.x - t.cursorOrigin
                 if abs(delta) >= step {
                     let chars = Int(delta / step)
                     model.moveCursor(by: chars)
@@ -367,7 +415,15 @@ final class KeyTouchView: UIView {
                 continue
             }
             guard let t = self.touches.removeValue(forKey: id) else { continue }
-            if let key = tracker.end(id) { commit(key) }
+            if t.swiping {
+                swipeTouch = nil
+                endTrail()
+                _ = tracker.end(id)
+                let words = decoder?.candidates(for: t.path + [touch.location(in: self)],
+                                                extraWords: model.swipeExtraWords) ?? []
+                // Nothing fits: type the key it started on, as if it were a tap.
+                if words.isEmpty { commit(t.spec) } else { model.swiped(words) }
+            } else if let key = tracker.end(id) { commit(key) }
             if repeatTouch == id { stopRepeating() }
             if !self.touches.values.contains(where: { $0.spec.id == t.spec.id }) {
                 model.presses.down.remove(t.spec.id)
@@ -424,7 +480,66 @@ final class KeyTouchView: UIView {
         case .returnKey: model.newline()
         case .layer: model.toggleLayer()
         case .symbols: model.toggleSymbols()
+        case .emoji: model.showEmoji = true
         case .shift, .delete, .globe: break
         }
+    }
+
+    // MARK: Swipe typing
+
+    /// The letters' layout changed (rotation, or the letters layer came back): update the swipe decoder.
+    private func updateDecoder() {
+        let letters = keys.filter { if case .character(let c) = $0.spec.kind { return c.count == 1 && c >= "a" && c <= "z" }; return false }
+        let frames = letters.map(\.frame)
+        guard frames != decoderLayout else { return }
+        decoderLayout = frames
+        guard letters.count == 26, let q = letters.first?.frame else { decoder = nil; return }
+        keyUnit = q.width
+        var centers: [Character: CGPoint] = [:]
+        for (spec, f) in letters {
+            guard case .character(let c) = spec.kind, let ch = c.first else { continue }
+            // Keys at the ends of the middle row have widened touch areas; use the visible key's center.
+            var x = f.midX
+            if f.width > keyUnit * 1.01 { x = f.minX <= 0.5 ? f.maxX - keyUnit / 2 : f.minX + keyUnit / 2 }
+            centers[ch] = CGPoint(x: x, y: f.midY)
+        }
+        decoder = SwipeDecoder(keyCenters: centers, keySize: CGSize(width: keyUnit, height: q.height))
+    }
+
+    private func startTrail() {
+        guard let model else { return }
+        let color = UIColor(KeyPalette.make(model.theme).accent)
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        trail.removeAllAnimations()
+        trail.strokeColor = color.withAlphaComponent(0.75).cgColor
+        trail.shadowColor = color.cgColor
+        trail.shadowRadius = 4
+        trail.shadowOpacity = 0.8
+        trail.shadowOffset = .zero
+        trail.opacity = 1
+        CATransaction.commit()
+    }
+
+    private func drawTrail(_ points: [CGPoint]) {
+        // Only the most recent stretch, so the line follows the finger like a comet tail.
+        let recent = points.suffix(90)
+        guard let first = recent.first else { return }
+        let path = UIBezierPath()
+        path.move(to: first)
+        for p in recent.dropFirst() { path.addLine(to: p) }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        trail.path = path.cgPath
+        CATransaction.commit()
+    }
+
+    private func endTrail() {
+        let fade = CABasicAnimation(keyPath: "opacity")
+        fade.fromValue = 1
+        fade.toValue = 0
+        fade.duration = 0.25
+        trail.opacity = 0
+        trail.add(fade, forKey: "fade")
     }
 }

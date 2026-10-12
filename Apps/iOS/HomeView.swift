@@ -281,6 +281,7 @@ struct SettingsView: View {
                 Picker("Autocorrect", selection: $app.settings.keyboardAutocorrectStrength) {
                     ForEach(AutocorrectStrength.allCases) { Text($0.name).tag($0) }
                 }
+                Toggle("Swipe to type", isOn: $app.settings.keyboardSwipeTyping)
                 Toggle("Suggestions", isOn: $app.settings.keyboardSuggestions)
                 Toggle("Auto-capitalization", isOn: $app.settings.keyboardAutoCapitalize)
                 Toggle("“.” shortcut (double-tap space)", isOn: $app.settings.keyboardDoubleSpacePeriod)
@@ -288,7 +289,7 @@ struct SettingsView: View {
             } header: {
                 Text("Wispen keyboard")
             } footer: {
-                Text("Autocorrect: \(app.settings.keyboardAutocorrectStrength.detail) The fix shows in bold above the keys before you press space; tap your own spelling to keep it. Backspace right after a correction undoes it, and Wispen won't correct that word again. Key click sounds need Allow Full Access. Drag the space bar to move the cursor.")
+                Text("Autocorrect: \(app.settings.keyboardAutocorrectStrength.detail) The fix shows in bold above the keys before you press space; tap your own spelling to keep it. Backspace right after a correction undoes it, and Wispen won't correct that word again. Swipe to type: slide one finger across the letters without lifting; other likely words appear above the keys, and backspace removes the whole word. Tap 🙂 for emoji. Key click sounds need Allow Full Access. Drag the space bar to move the cursor.")
             }
             Section {
                 Toggle("Dynamic Island & Lock Screen", isOn: $app.settings.liveActivities)
@@ -314,8 +315,9 @@ struct SettingsView: View {
             }
         }
         .navigationTitle("Settings")
-        // The keyboard picks up the new strength right away.
+        // The keyboard picks up these changes right away.
         .onChange(of: app.settings.keyboardAutocorrectStrength) { DarwinNotifier.shared.post(.theme) }
+        .onChange(of: app.settings.keyboardSwipeTyping) { DarwinNotifier.shared.post(.theme) }
     }
 }
 

@@ -30,6 +30,10 @@ final class KeyboardModel: ObservableObject {
     @Published private(set) var autocorrectPreview: String?
     @Published var currentWord = ""
     @Published var showStyles = false
+    @Published var showEmoji = false
+    @Published private(set) var recentEmoji: [String] = UserDefaults.standard.stringArray(forKey: "recentEmoji") ?? []
+    /// Slide across the letters to type a word (Wispen › Settings).
+    private(set) var swipeTyping = true
     @Published private(set) var returnKeyLabel: String?
 
     let styles: [DictationStyle]
@@ -44,6 +48,8 @@ final class KeyboardModel: ObservableObject {
     private var messageTimer: Timer?
     private var lastInsertion: (text: String, replaced: String?)?
     private var lastAutocorrect: (original: String, corrected: String, trailing: String)?
+    /// The word just typed by swiping, and the other likely words (offered in the suggestion bar).
+    private var lastSwipe: (word: String, alternatives: [String])?
     private var autocorrector = Autocorrector(strength: .balanced)
     /// Words you've kept after Wispen corrected them: never corrected again.
     private var learnedWords: Set<String> = Set(UserDefaults.standard.stringArray(forKey: "learnedWords") ?? [])
@@ -66,6 +72,9 @@ final class KeyboardModel: ObservableObject {
         settings = store.loadSettings()
         theme = settings.keyboardTheme
         autocorrector = Autocorrector(strength: settings.keyboardAutocorrectStrength)
+        swipeTyping = settings.keyboardSwipeTyping
+        // Build the swipe word index off the main thread, before the first swipe needs it.
+        DispatchQueue.global(qos: .utility).async { _ = SwipeIndex.english }
         styleID = UserDefaults.standard.string(forKey: "keyboardStyleID") ?? settings.defaultStyleID
         // Your dictionary words are never "misspelled".
         for term in protectedTerms where !UITextChecker.hasLearnedWord(term) { UITextChecker.learnWord(term) }
@@ -128,6 +137,7 @@ final class KeyboardModel: ObservableObject {
     func reloadTheme() {
         let fresh = store.loadSettings()
         autocorrector.strength = fresh.keyboardAutocorrectStrength
+        swipeTyping = fresh.keyboardSwipeTyping
         let t = fresh.keyboardTheme
         if t != theme { theme = t }
         effects.apply(t)
@@ -366,6 +376,11 @@ final class KeyboardModel: ObservableObject {
             proxy.insertText(auto.original)
             learn(auto.original)
             lastAutocorrect = nil
+        } else if let swipe = lastSwipe, currentWord == swipe.word,
+                  proxy.documentContextBeforeInput?.hasSuffix(swipe.word) == true {
+            // Like the system keyboard: backspace after a swipe removes the whole word.
+            for _ in 0..<swipe.word.count { proxy.deleteBackward() }
+            lastSwipe = nil
         } else {
             proxy.deleteBackward()
         }
@@ -390,6 +405,7 @@ final class KeyboardModel: ObservableObject {
     func moveCursor(by offset: Int) {
         proxy?.adjustTextPosition(byCharacterOffset: offset)
         lastAutocorrect = nil
+        lastSwipe = nil
         updateSuggestions()
     }
 
@@ -426,6 +442,47 @@ final class KeyboardModel: ObservableObject {
     private func afterEdit() {
         canUndo = false
         if lastAutocorrect != nil { lastAutocorrect = nil }
+        lastSwipe = nil
+    }
+
+    // MARK: Swipe typing and emoji
+
+    /// Your dictionary and learned words can be swiped too.
+    var swipeExtraWords: [String] { protectedTerms + Array(learnedWords) }
+
+    /// Types the best of `words` (likeliest first) for a swipe. The others show above the keys.
+    func swiped(_ words: [String]) {
+        guard let proxy, !words.isEmpty else { return }
+        message = nil
+        pendingInsert = nil
+        // A word you were tapping out is finished first, as if you'd pressed space.
+        if lastSwipe == nil { _ = autocorrectCurrentWord() }
+        let cased = words.map { w -> String in
+            switch shift {
+            case .locked: return w.uppercased()
+            case .once: return w.prefix(1).uppercased() + w.dropFirst()
+            case .off: return w
+            }
+        }
+        // Words are spaced automatically, so you can swipe one after another.
+        let before = proxy.documentContextBeforeInput ?? ""
+        let needsSpace = before.last.map { !$0.isWhitespace && !"([{\"“‘/@#-".contains($0) } ?? false
+        proxy.insertText((needsSpace ? " " : "") + cased[0])
+        afterEdit()
+        lastSwipe = (cased[0], Array(cased.dropFirst()))
+        if shift == .once { shift = .off }
+        updateSuggestions()
+    }
+
+    func insertEmoji(_ emoji: String) {
+        message = nil
+        pendingInsert = nil
+        proxy?.insertText(emoji)
+        afterEdit()
+        recentEmoji = EmojiCatalog.recordUse(emoji, in: recentEmoji)
+        defaults.set(recentEmoji, forKey: "recentEmoji")
+        updateShift()
+        updateSuggestions()
     }
 
     private func updateShift() {
@@ -444,8 +501,14 @@ final class KeyboardModel: ObservableObject {
     private func updateSuggestions() {
         let word = KeyboardTextLogic.currentWord(before: proxy?.documentContextBeforeInput)
         currentWord = word
+        if let swipe = lastSwipe, swipe.word == word {
+            autocorrectPreview = nil
+            suggestions = Array(swipe.alternatives.prefix(2))
+            return
+        }
         guard settings.keyboardSuggestions, !word.isEmpty, word.count < 40 else {
             suggestions = []
+            autocorrectPreview = nil
             return
         }
         let range = NSRange(location: 0, length: (word as NSString).length)
@@ -478,6 +541,8 @@ final class KeyboardModel: ObservableObject {
         guard let proxy, autocorrector.strength != .off else { return nil }
         let word = KeyboardTextLogic.currentWord(before: proxy.documentContextBeforeInput)
         guard !word.isEmpty, word.count < 30 else { return nil }
+        // A swiped word is already a real word.
+        if let swipe = lastSwipe, swipe.word == word { return nil }
         let range = NSRange(location: 0, length: (word as NSString).length)
         let misspelled = checker.rangeOfMisspelledWord(in: word, range: range, startingAt: 0, wrap: false,
                                                        language: checkerLanguage).location != NSNotFound

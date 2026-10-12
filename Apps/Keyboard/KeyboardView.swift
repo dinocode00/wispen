@@ -18,6 +18,8 @@ struct KeyboardView: View {
                         VoicePanel(model: model)
                     } else if model.showStyles {
                         StylesPanel(model: model)
+                    } else if model.showEmoji {
+                        EmojiPanel(model: model)
                     } else {
                         KeysView(model: model)
                     }
@@ -228,5 +230,138 @@ private struct StylesPanel: View {
             }
             .padding(10)
         }
+    }
+}
+
+// MARK: Emoji panel
+
+/// Every emoji in a sideways-scrolling grid, with Frequently Used first, like the system keyboard.
+/// Only the emoji on screen are drawn.
+private struct EmojiPanel: View {
+    @ObservedObject var model: KeyboardModel
+    @Environment(\.keyPalette) private var palette
+    /// The first emoji at the left edge, as "section-index"; setting it jumps to a section.
+    @State private var position: String?
+
+    /// The catalog's groups, prepared once.
+    private static let groupSections: [EmojiSection] = EmojiCatalog.shared.groups.enumerated().map { i, g in
+        EmojiSection(id: "g\(i)", symbol: g.symbol, name: g.name, emoji: g.emoji.map(\.character))
+    }
+
+    private struct EmojiSection: Identifiable {
+        let id: String
+        let symbol: String
+        let name: String
+        let emoji: [String]
+    }
+
+    private var sections: [EmojiSection] {
+        var out: [EmojiSection] = []
+        if !model.recentEmoji.isEmpty {
+            out.append(EmojiSection(id: "r", symbol: "clock", name: "Frequently used", emoji: model.recentEmoji))
+        }
+        return out + Self.groupSections
+    }
+
+    private var currentSection: String {
+        position.flatMap { $0.split(separator: "-").first.map(String.init) } ?? sections.first?.id ?? ""
+    }
+
+    var body: some View {
+        let sections = sections
+        VStack(spacing: 0) {
+            GeometryReader { geo in
+                let cell = max(28, (geo.size.height - 22) / 5)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text((sections.first { $0.id == currentSection }?.name ?? "").uppercased())
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(palette.text.opacity(0.5))
+                        .padding(.leading, 10)
+                        .frame(height: 18)
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        LazyHGrid(rows: Array(repeating: GridItem(.fixed(cell), spacing: 0), count: 5), spacing: 0) {
+                            ForEach(sections) { section in
+                                ForEach(Array(section.emoji.enumerated()), id: \.offset) { i, e in
+                                    Button { model.insertEmoji(e) } label: {
+                                        Text(e)
+                                            .font(.system(size: cell * 0.78))
+                                            .frame(width: cell * 1.12, height: cell)
+                                            .contentShape(Rectangle())
+                                    }
+                                    .buttonStyle(.plain)
+                                    .id("\(section.id)-\(i)")
+                                }
+                            }
+                        }
+                        .scrollTargetLayout()
+                        .padding(.horizontal, 6)
+                    }
+                    .scrollPosition(id: $position, anchor: .leading)
+                }
+            }
+
+            HStack(spacing: 0) {
+                Button { model.showEmoji = false } label: {
+                    Text("ABC").font(palette.font(15)).foregroundStyle(palette.text)
+                        .frame(width: 48, height: 34)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Letters")
+
+                ForEach(sections) { section in
+                    Button { position = "\(section.id)-0" } label: {
+                        Image(systemName: section.symbol)
+                            .font(.system(size: 15, weight: .medium))
+                            .foregroundStyle(currentSection == section.id ? palette.accent : palette.text.opacity(0.55))
+                            .frame(maxWidth: .infinity, minHeight: 34)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(section.name)
+                }
+
+                RepeatingDeleteButton(model: model)
+            }
+            .padding(.horizontal, 4)
+            .padding(.bottom, 4)
+        }
+    }
+}
+
+/// Delete for the emoji panel: tap to delete one, hold to keep deleting.
+private struct RepeatingDeleteButton: View {
+    @ObservedObject var model: KeyboardModel
+    @Environment(\.keyPalette) private var palette
+    @State private var timer: Timer?
+
+    var body: some View {
+        Image(systemName: timer == nil ? "delete.left" : "delete.left.fill")
+            .font(.system(size: 17, weight: .medium))
+            .foregroundStyle(palette.text)
+            .frame(width: 48, height: 34)
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { _ in
+                        guard timer == nil else { return }
+                        model.deleteBackward()
+                        timer = Timer.scheduledTimer(withTimeInterval: 0.45, repeats: false) { _ in
+                            Task { @MainActor in
+                                guard timer != nil else { return }
+                                timer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { _ in
+                                    Task { @MainActor in model.deleteBackward() }
+                                }
+                            }
+                        }
+                    }
+                    .onEnded { _ in
+                        timer?.invalidate()
+                        timer = nil
+                    }
+            )
+            .accessibilityElement()
+            .accessibilityLabel("Delete")
+            .accessibilityAddTraits(.isButton)
+            .accessibilityAction { model.deleteBackward() }
     }
 }

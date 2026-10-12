@@ -53,6 +53,7 @@ public final class WordList: @unchecked Sendable {
     public func rank(of word: String) -> Int? { ranks[word.lowercased()] }
 
     func entries(ofLength n: Int) -> [Entry] { byLength[n] ?? [] }
+    func allEntries() -> [Entry] { byLength.values.flatMap { $0 } }
 }
 
 /// Where each letter sits on the QWERTY keyboard, in key widths. Letters are coded 0–25 (other

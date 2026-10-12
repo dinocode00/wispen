@@ -89,6 +89,8 @@ public struct WispenSettings: Codable, Equatable, Sendable {
     public var keyboardAutoCapitalize: Bool = true
     public var keyboardDoubleSpacePeriod: Bool = true
     public var keyboardSuggestions: Bool = true
+    /// Slide a finger across the letters to type a word.
+    public var keyboardSwipeTyping: Bool = true
     public var keyboardSounds: Bool = false
     /// Look and touch effects of the Wispen keyboard.
     public var keyboardTheme = KeyboardTheme()
@@ -139,6 +141,7 @@ public struct WispenSettings: Codable, Equatable, Sendable {
         keyboardAutoCapitalize = try c.decodeIfPresent(Bool.self, forKey: .keyboardAutoCapitalize) ?? d.keyboardAutoCapitalize
         keyboardDoubleSpacePeriod = try c.decodeIfPresent(Bool.self, forKey: .keyboardDoubleSpacePeriod) ?? d.keyboardDoubleSpacePeriod
         keyboardSuggestions = try c.decodeIfPresent(Bool.self, forKey: .keyboardSuggestions) ?? d.keyboardSuggestions
+        keyboardSwipeTyping = try c.decodeIfPresent(Bool.self, forKey: .keyboardSwipeTyping) ?? d.keyboardSwipeTyping
         keyboardSounds = try c.decodeIfPresent(Bool.self, forKey: .keyboardSounds) ?? d.keyboardSounds
         keyboardTheme = (try? c.decodeIfPresent(KeyboardTheme.self, forKey: .keyboardTheme)) ?? d.keyboardTheme
         liveActivities = try c.decodeIfPresent(Bool.self, forKey: .liveActivities) ?? d.liveActivities
