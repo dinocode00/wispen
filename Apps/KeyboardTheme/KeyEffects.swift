@@ -355,29 +355,49 @@ final class EffectsCanvasView: UIView {
         after(delay + duration + 0.05) { s.removeFromSuperlayer() }
     }
 
-    /// A rune: a stave with two branches, floating up and fading.
-    func rune(near p: CGPoint, size: CGFloat = 7) {
-        let branches: [(CGFloat, CGFloat, CGFloat, CGFloat)] = [
-            (0, -1, 0.6, -0.4), (0, -0.3, 0.6, 0.3), (0, -1, -0.6, -0.4), (0, 0.3, 0.6, -0.2),
-            (0, -0.5, -0.6, 0), (0, 0.2, -0.6, 0.7), (0.6, -0.4, 0, 0.2), (0, -1, 0.6, -1.3),
-        ]
-        let path = UIBezierPath()
-        path.move(to: CGPoint(x: 0, y: -size))
-        path.addLine(to: CGPoint(x: 0, y: size))
-        for b in [branches.randomElement()!, branches.randomElement()!] {
-            path.move(to: CGPoint(x: b.0 * size, y: b.1 * size))
-            path.addLine(to: CGPoint(x: b.2 * size, y: b.3 * size))
-        }
+    /// An elvish letter, dwarf rune or Middle-earth symbol (see `ElvishGlyphs`), floating up and fading.
+    func rune(near p: CGPoint) {
+        let glyph = ElvishGlyphs.random()
+        var scale = CGAffineTransform(scaleX: 0.72, y: 0.72)
         let s = CAShapeLayer()
-        s.path = path.cgPath
-        s.strokeColor = UIColor(red: 0.7, green: 0.85, blue: 1, alpha: 1).cgColor
+        s.path = glyph.path.copy(using: &scale)
         s.fillColor = nil
         s.lineWidth = 1.3
         s.lineCap = .round
-        s.shadowColor = UIColor(red: 0.24, green: 0.42, blue: 1, alpha: 1).cgColor
+        s.lineJoin = .round
         s.shadowOpacity = 1
         s.shadowRadius = 4
         s.shadowOffset = .zero
+        var extra: [CAAnimation] = []
+        switch glyph.kind {
+        case .tengwa, .certh:
+            s.strokeColor = UIColor(red: 0.7, green: 0.85, blue: 1, alpha: 1).cgColor
+            s.shadowColor = UIColor(red: 0.24, green: 0.42, blue: 1, alpha: 1).cgColor
+        case .star:
+            // The Star of Fëanor twinkles as it turns.
+            s.strokeColor = UIColor(red: 0.96, green: 0.98, blue: 1, alpha: 1).cgColor
+            s.shadowColor = UIColor(red: 0.56, green: 0.72, blue: 1, alpha: 1).cgColor
+            let turn = CABasicAnimation(keyPath: "transform.rotation.z")
+            turn.toValue = Double.pi / 4
+            let twinkle = CAKeyframeAnimation(keyPath: "transform.scale")
+            twinkle.values = [0.6, 1.1, 0.9, 1]
+            extra = [turn, twinkle]
+        case .leaf:
+            // A mallorn leaf sways as it drifts.
+            s.strokeColor = UIColor(red: 0.85, green: 0.91, blue: 1, alpha: 1).cgColor
+            s.shadowColor = UIColor(red: 0.45, green: 0.62, blue: 1, alpha: 1).cgColor
+            let sway = CAKeyframeAnimation(keyPath: "transform.rotation.z")
+            sway.values = [-0.35, 0.3, -0.2, 0.25]
+            extra = [sway]
+        case .ring:
+            // The One Ring, in gold, turning.
+            s.strokeColor = UIColor(red: 1, green: 0.82, blue: 0.37, alpha: 1).cgColor
+            s.shadowColor = UIColor(red: 1, green: 0.54, blue: 0.12, alpha: 1).cgColor
+            s.shadowRadius = 5
+            let spin = CABasicAnimation(keyPath: "transform.rotation.y")
+            spin.toValue = Double.pi * 2
+            extra = [spin]
+        }
         let start = CGPoint(x: p.x + .random(in: -22...22), y: p.y - .random(in: 8...24))
         s.position = start
         s.opacity = 0
@@ -389,10 +409,10 @@ final class EffectsCanvasView: UIView {
         fade.values = [0, 1, 1, 0]
         fade.keyTimes = [0, 0.15, 0.6, 1]
         let g = CAAnimationGroup()
-        g.animations = [rise, fade]
-        g.duration = 0.9
+        g.animations = [rise, fade] + extra
+        g.duration = glyph.kind == .ring ? 1.1 : 0.9
         s.add(g, forKey: "rune")
-        after(0.95) { s.removeFromSuperlayer() }
+        after(g.duration + 0.05) { s.removeFromSuperlayer() }
     }
 
     static func snowflake(length L: CGFloat) -> UIBezierPath {
@@ -422,7 +442,7 @@ private extension UIColor {
     }
 }
 
-// MARK: - Arcane: blue sparks orbit your fingertip inside a turning magic circle; runes rise.
+// MARK: - Arcane: blue sparks orbit your fingertip inside a turning magic circle; elvish letters rise.
 
 @MainActor
 private final class ArcanePress: EffectPress {
