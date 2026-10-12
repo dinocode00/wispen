@@ -83,7 +83,9 @@ public struct WispenSettings: Codable, Equatable, Sendable {
     public var meetingSpeakerLabels: Bool = true
 
     // iOS keyboard
+    /// Legacy on/off switch; `keyboardAutocorrectStrength` replaced it.
     public var keyboardAutoCorrect: Bool = true
+    public var keyboardAutocorrectStrength: AutocorrectStrength = .balanced
     public var keyboardAutoCapitalize: Bool = true
     public var keyboardDoubleSpacePeriod: Bool = true
     public var keyboardSuggestions: Bool = true
@@ -132,6 +134,8 @@ public struct WispenSettings: Codable, Equatable, Sendable {
         meetingCaptureSystemAudio = try c.decodeIfPresent(Bool.self, forKey: .meetingCaptureSystemAudio) ?? d.meetingCaptureSystemAudio
         meetingSpeakerLabels = try c.decodeIfPresent(Bool.self, forKey: .meetingSpeakerLabels) ?? d.meetingSpeakerLabels
         keyboardAutoCorrect = try c.decodeIfPresent(Bool.self, forKey: .keyboardAutoCorrect) ?? d.keyboardAutoCorrect
+        keyboardAutocorrectStrength = (try? c.decodeIfPresent(AutocorrectStrength.self, forKey: .keyboardAutocorrectStrength))
+            ?? (keyboardAutoCorrect ? d.keyboardAutocorrectStrength : .off)
         keyboardAutoCapitalize = try c.decodeIfPresent(Bool.self, forKey: .keyboardAutoCapitalize) ?? d.keyboardAutoCapitalize
         keyboardDoubleSpacePeriod = try c.decodeIfPresent(Bool.self, forKey: .keyboardDoubleSpacePeriod) ?? d.keyboardDoubleSpacePeriod
         keyboardSuggestions = try c.decodeIfPresent(Bool.self, forKey: .keyboardSuggestions) ?? d.keyboardSuggestions

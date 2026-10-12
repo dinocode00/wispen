@@ -26,6 +26,8 @@ final class KeyboardModel: ObservableObject {
     @Published var layer: Layer = .letters
     @Published var shift: Shift = .once
     @Published var suggestions: [String] = []
+    /// What space will change the current word to (shown bold in the suggestion bar).
+    @Published private(set) var autocorrectPreview: String?
     @Published var currentWord = ""
     @Published var showStyles = false
     @Published private(set) var returnKeyLabel: String?
@@ -41,7 +43,10 @@ final class KeyboardModel: ObservableObject {
     private var poll: Timer?
     private var messageTimer: Timer?
     private var lastInsertion: (text: String, replaced: String?)?
-    private var lastAutocorrect: (original: String, corrected: String)?
+    private var lastAutocorrect: (original: String, corrected: String, trailing: String)?
+    private var autocorrector = Autocorrector(strength: .balanced)
+    /// Words you've kept after Wispen corrected them: never corrected again.
+    private var learnedWords: Set<String> = Set(UserDefaults.standard.stringArray(forKey: "learnedWords") ?? [])
     private var lastShiftTap = Date.distantPast
     private let defaults = UserDefaults.standard
     private let protectedTerms: [String]
@@ -60,6 +65,7 @@ final class KeyboardModel: ObservableObject {
         protectedTerms = store.loadDictionary().map(\.term)
         settings = store.loadSettings()
         theme = settings.keyboardTheme
+        autocorrector = Autocorrector(strength: settings.keyboardAutocorrectStrength)
         styleID = UserDefaults.standard.string(forKey: "keyboardStyleID") ?? settings.defaultStyleID
         // Your dictionary words are never "misspelled".
         for term in protectedTerms where !UITextChecker.hasLearnedWord(term) { UITextChecker.learnWord(term) }
@@ -120,7 +126,9 @@ final class KeyboardModel: ObservableObject {
     }
 
     func reloadTheme() {
-        let t = store.loadSettings().keyboardTheme
+        let fresh = store.loadSettings()
+        autocorrector.strength = fresh.keyboardAutocorrectStrength
+        let t = fresh.keyboardTheme
         if t != theme { theme = t }
         effects.apply(t)
     }
@@ -311,8 +319,11 @@ final class KeyboardModel: ObservableObject {
         message = nil
         pendingInsert = nil
         let text = (layer == .letters && shift != .off) ? character.uppercased() : character
+        // Punctuation ends a word, so it's corrected first (like space).
+        let corrected = ".,!?;:".contains(character) ? autocorrectCurrentWord() : nil
         proxy?.insertText(text)
         afterEdit()
+        if let corrected { lastAutocorrect = (corrected.original, corrected.corrected, text) }
         if shift == .once { shift = .off }
         // Like the system keyboard: an apostrophe on the numbers layer returns to letters.
         if layer != .letters, character == "'" { layer = .letters }
@@ -328,10 +339,10 @@ final class KeyboardModel: ObservableObject {
             proxy.insertText(". ")
             afterEdit()
         } else {
-            let corrected = settings.keyboardAutoCorrect ? autocorrectCurrentWord() : nil
+            let corrected = autocorrectCurrentWord()
             proxy.insertText(" ")
             afterEdit()
-            lastAutocorrect = corrected
+            lastAutocorrect = corrected.map { ($0.original, $0.corrected, " ") }
         }
         if layer != .letters { layer = .letters }
         updateShift()
@@ -339,8 +350,10 @@ final class KeyboardModel: ObservableObject {
     }
 
     func newline() {
+        let corrected = autocorrectCurrentWord()
         proxy?.insertText("\n")
         afterEdit()
+        lastAutocorrect = corrected.map { ($0.original, $0.corrected, "\n") }
         updateShift()
         updateSuggestions()
     }
@@ -348,9 +361,10 @@ final class KeyboardModel: ObservableObject {
     func deleteBackward() {
         guard let proxy else { return }
         if let auto = lastAutocorrect {
-            // Backspace right after an autocorrection restores what you typed.
-            for _ in 0..<(auto.corrected.count + 1) { proxy.deleteBackward() }
+            // Backspace right after an autocorrection restores what you typed, and remembers it.
+            for _ in 0..<(auto.corrected.count + auto.trailing.count) { proxy.deleteBackward() }
             proxy.insertText(auto.original)
+            learn(auto.original)
             lastAutocorrect = nil
         } else {
             proxy.deleteBackward()
@@ -399,6 +413,8 @@ final class KeyboardModel: ObservableObject {
 
     func pick(_ suggestion: String) {
         guard let proxy else { return }
+        // Tapping your own spelling (“…”) keeps it, and teaches the keyboard the word.
+        if suggestion == currentWord, autocorrectPreview != nil { learn(suggestion) }
         for _ in 0..<currentWord.count { proxy.deleteBackward() }
         proxy.insertText(suggestion + " ")
         lastAutocorrect = nil
@@ -437,22 +453,37 @@ final class KeyboardModel: ObservableObject {
                                                        language: checkerLanguage).location != NSNotFound
         let corrections = misspelled ? (checker.guesses(forWordRange: range, in: word, language: checkerLanguage) ?? []) : []
         let completions = checker.completions(forPartialWordRange: range, in: word, language: checkerLanguage) ?? []
-        suggestions = KeyboardTextLogic.suggestions(for: word, vocabulary: protectedTerms, corrections: corrections,
-                                                    completions: completions)
+        let preview = autocorrector.correction(for: word, systemKnows: !misspelled, protected: protectedSet,
+                                               extraCandidates: corrections)
+        autocorrectPreview = preview
+        let rest = KeyboardTextLogic.suggestions(for: word, vocabulary: protectedTerms, corrections: corrections,
+                                                 completions: completions)
+        suggestions = Array(([preview].compactMap { $0 } + rest.filter { $0 != preview }).prefix(2))
     }
 
-    /// Fixes an obvious typo in the word before the cursor. Returns what was changed, for undo.
+    /// Your dictionary words plus words you've taught the keyboard, lowercased.
+    private var protectedSet: Set<String> { Set(protectedTerms.map { $0.lowercased() }).union(learnedWords) }
+
+    private func learn(_ word: String) {
+        let lower = word.lowercased()
+        guard !lower.isEmpty, !learnedWords.contains(lower) else { return }
+        learnedWords.insert(lower)
+        defaults.set(Array(learnedWords), forKey: "learnedWords")
+        if !UITextChecker.hasLearnedWord(word) { UITextChecker.learnWord(word) }
+    }
+
+    /// Fixes a typo in the word before the cursor (strength set in Wispen › Settings). Returns what
+    /// was changed, for undo.
     private func autocorrectCurrentWord() -> (original: String, corrected: String)? {
-        guard let proxy else { return nil }
+        guard let proxy, autocorrector.strength != .off else { return nil }
         let word = KeyboardTextLogic.currentWord(before: proxy.documentContextBeforeInput)
-        guard word.count >= 3 else { return nil }
+        guard !word.isEmpty, word.count < 30 else { return nil }
         let range = NSRange(location: 0, length: (word as NSString).length)
-        guard checker.rangeOfMisspelledWord(in: word, range: range, startingAt: 0, wrap: false,
-                                            language: checkerLanguage).location != NSNotFound else { return nil }
-        let guesses = checker.guesses(forWordRange: range, in: word, language: checkerLanguage) ?? []
-        guard let fix = KeyboardTextLogic.autocorrection(for: word, guesses: guesses, protectedTerms: Set(protectedTerms)) else {
-            return nil
-        }
+        let misspelled = checker.rangeOfMisspelledWord(in: word, range: range, startingAt: 0, wrap: false,
+                                                       language: checkerLanguage).location != NSNotFound
+        let guesses = misspelled ? (checker.guesses(forWordRange: range, in: word, language: checkerLanguage) ?? []) : []
+        guard let fix = autocorrector.correction(for: word, systemKnows: !misspelled, protected: protectedSet,
+                                                 extraCandidates: guesses), fix != word else { return nil }
         for _ in 0..<word.count { proxy.deleteBackward() }
         proxy.insertText(fix)
         return (word, fix)

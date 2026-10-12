@@ -8,7 +8,7 @@ let package = Package(
         .library(name: "WispenCore", targets: ["WispenCore"]),
     ],
     targets: [
-        .target(name: "WispenCore"),
+        .target(name: "WispenCore", resources: [.copy("Resources/en_words.txt")]),
         .testTarget(name: "WispenCoreTests", dependencies: ["WispenCore"]),
     ]
 )

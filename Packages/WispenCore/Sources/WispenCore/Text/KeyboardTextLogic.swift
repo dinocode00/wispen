@@ -63,9 +63,13 @@ public enum KeyboardTextLogic {
     }
 
     /// Gives `suggestion` the same casing pattern as what was typed ("Teh" → "The", "TEH" → "THE").
-    public static func matchCase(_ suggestion: String, to typed: String) -> String {
+    /// `keepCapitalI`: "I", "I'm", "I'll" stay capitalised even when typed in lowercase.
+    public static func matchCase(_ suggestion: String, to typed: String, keepCapitalI: Bool = false) -> String {
         let letters = typed.filter(\.isLetter)
         if letters.count > 1, letters == letters.uppercased() { return suggestion.uppercased() }
+        if keepCapitalI, suggestion.first == "I", suggestion.dropFirst().first.map({ !$0.isLetter }) ?? true {
+            return suggestion
+        }
         if let f = typed.first, f.isUppercase { return suggestion.prefix(1).uppercased() + suggestion.dropFirst() }
         return suggestion
     }

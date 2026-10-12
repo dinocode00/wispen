@@ -278,7 +278,9 @@ struct SettingsView: View {
                         Label("Look & effects", systemImage: "paintpalette")
                     }
                 }
-                Toggle("Auto-correction", isOn: $app.settings.keyboardAutoCorrect)
+                Picker("Autocorrect", selection: $app.settings.keyboardAutocorrectStrength) {
+                    ForEach(AutocorrectStrength.allCases) { Text($0.name).tag($0) }
+                }
                 Toggle("Suggestions", isOn: $app.settings.keyboardSuggestions)
                 Toggle("Auto-capitalization", isOn: $app.settings.keyboardAutoCapitalize)
                 Toggle("“.” shortcut (double-tap space)", isOn: $app.settings.keyboardDoubleSpacePeriod)
@@ -286,7 +288,7 @@ struct SettingsView: View {
             } header: {
                 Text("Wispen keyboard")
             } footer: {
-                Text("Changes apply the next time the keyboard opens. Key click sounds need Allow Full Access. Drag the space bar to move the cursor; backspace right after an autocorrection undoes it.")
+                Text("Autocorrect: \(app.settings.keyboardAutocorrectStrength.detail) The fix shows in bold above the keys before you press space; tap your own spelling to keep it. Backspace right after a correction undoes it, and Wispen won't correct that word again. Key click sounds need Allow Full Access. Drag the space bar to move the cursor.")
             }
             Section {
                 Toggle("Dynamic Island & Lock Screen", isOn: $app.settings.liveActivities)
@@ -312,6 +314,8 @@ struct SettingsView: View {
             }
         }
         .navigationTitle("Settings")
+        // The keyboard picks up the new strength right away.
+        .onChange(of: app.settings.keyboardAutocorrectStrength) { DarwinNotifier.shared.post(.theme) }
     }
 }
 

@@ -24,6 +24,7 @@ final class KeyboardThemeTests: XCTestCase {
         let s = try JSONDecoder().decode(WispenSettings.self, from: json)
         XCTAssertTrue(s.keyboardSounds)
         XCTAssertEqual(s.keyboardTheme, KeyboardTheme())
+        XCTAssertEqual(s.keyboardAutocorrectStrength, .balanced)
     }
 
     func testUnknownValuesFallBackInsteadOfWipingSettings() throws {
@@ -34,6 +35,7 @@ final class KeyboardThemeTests: XCTestCase {
         """#.data(using: .utf8)!
         let s = try JSONDecoder().decode(WispenSettings.self, from: json)
         XCTAssertFalse(s.keyboardAutoCorrect)
+        XCTAssertEqual(s.keyboardAutocorrectStrength, .off, "turning autocorrect off earlier carries over")
         XCTAssertEqual(s.keyboardTheme.look, .black)
         XCTAssertEqual(s.keyboardTheme.effect, .fire)
         XCTAssertEqual(s.keyboardTheme.neon, KeyboardTheme.neonColors[0])

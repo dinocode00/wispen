@@ -124,7 +124,7 @@ private struct Toolbar: View {
     private func suggestion(_ title: String, value: String) -> some View {
         Button { model.pick(value) } label: {
             Text(title)
-                .font(.system(size: 16))
+                .font(.system(size: 16, weight: value == model.autocorrectPreview ? .semibold : .regular))
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
                 .foregroundStyle(palette.text)
