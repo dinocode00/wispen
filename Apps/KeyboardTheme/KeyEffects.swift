@@ -76,6 +76,8 @@ final class KeyEffectsEngine: ObservableObject {
                 withAnimation(.easeOut(duration: 0.25)) { self.comboShown = false }
             }
         }
+        // A 15× combo: Gandalf's staff comes down.
+        if effectsAllowed, theme.triggersStaffStrike(streak: streak) { canvas?.staffStrike() }
         return KeyboardTheme.intensity(streak: streak, combo: theme.combo)
     }
 }

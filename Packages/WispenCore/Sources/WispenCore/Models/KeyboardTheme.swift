@@ -105,6 +105,8 @@ public struct KeyboardTheme: Codable, Equatable, Sendable {
     public var combo = true
     /// Show the enlarged letter above a key while it's pressed.
     public var popups = true
+    /// A 15× combo brings Gandalf's staff down in a surge of magic (needs Combo mode).
+    public var staffStrike = true
     public var neon = KeyboardTheme.neonColors[0]
     public var custom = Custom()
 
@@ -115,6 +117,13 @@ public struct KeyboardTheme: Codable, Equatable, Sendable {
 
     /// Effects drawn as square pixels instead of soft glows.
     public var isPixel: Bool { look == .retro || (look == .custom && custom.font == .pixel) }
+
+    /// The combo that brings the staff down; once per streak.
+    public static let staffStrikeCombo = 15
+
+    public func triggersStaffStrike(streak: Int) -> Bool {
+        combo && staffStrike && effect != .none && streak == Self.staffStrikeCombo
+    }
 
     /// Effect strength from how fast you're typing: 1 normally, up to 3 on a long fast streak.
     public static func intensity(streak: Int, combo: Bool) -> Double {
@@ -129,6 +138,7 @@ public struct KeyboardTheme: Codable, Equatable, Sendable {
         effect = (try? c.decodeIfPresent(Effect.self, forKey: .effect)) ?? .arcane
         combo = (try? c.decodeIfPresent(Bool.self, forKey: .combo)) ?? true
         popups = (try? c.decodeIfPresent(Bool.self, forKey: .popups)) ?? true
+        staffStrike = (try? c.decodeIfPresent(Bool.self, forKey: .staffStrike)) ?? true
         neon = HexColor.normalized(try? c.decodeIfPresent(String.self, forKey: .neon)) ?? KeyboardTheme.neonColors[0]
         custom = (try? c.decodeIfPresent(Custom.self, forKey: .custom)) ?? Custom()
     }

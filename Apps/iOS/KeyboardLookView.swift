@@ -87,9 +87,11 @@ struct KeyboardLookView: View {
 
             Section {
                 Toggle("Combo mode", isOn: $app.settings.keyboardTheme.combo)
+                Toggle("Gandalf's staff at 15×", isOn: $app.settings.keyboardTheme.staffStrike)
+                    .disabled(!theme.combo)
                 Toggle("Key pop-ups", isOn: $app.settings.keyboardTheme.popups)
             } footer: {
-                Text("Combo mode makes effects grow the faster you type. Effects only animate while you touch a key or Wispen is listening, and switch off in Low Power Mode and with Reduce Motion.")
+                Text("Combo mode makes effects grow the faster you type. At a 15× combo, Gandalf's arm reaches in and strikes his staff down in a surge of magic (once per streak; you can keep typing through it). Effects only animate while you touch a key or Wispen is listening, and switch off in Low Power Mode and with Reduce Motion.")
             }
 
             Section {

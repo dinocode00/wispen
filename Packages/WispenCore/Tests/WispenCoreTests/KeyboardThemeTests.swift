@@ -72,4 +72,22 @@ final class KeyboardThemeTests: XCTestCase {
         XCTAssertEqual(HexColor.luminance("#FFFFFF"), 1, accuracy: 0.001)
         XCTAssertEqual(HexColor.luminance("#000000"), 0, accuracy: 0.001)
     }
+
+    func testStaffStrikeFiresOncePerStreakAtFifteen() {
+        var t = KeyboardTheme()
+        XCTAssertFalse(t.triggersStaffStrike(streak: 14))
+        XCTAssertTrue(t.triggersStaffStrike(streak: 15))
+        XCTAssertFalse(t.triggersStaffStrike(streak: 16), "only once per streak")
+        t.combo = false
+        XCTAssertFalse(t.triggersStaffStrike(streak: 15))
+        t.combo = true
+        t.staffStrike = false
+        XCTAssertFalse(t.triggersStaffStrike(streak: 15))
+        t.staffStrike = true
+        t.effect = .none
+        XCTAssertFalse(t.triggersStaffStrike(streak: 15))
+        // Saved before the setting existed: on.
+        let old = try! JSONDecoder().decode(KeyboardTheme.self, from: #"{"look":"black","effect":"arcane"}"#.data(using: .utf8)!)
+        XCTAssertTrue(old.staffStrike)
+    }
 }
