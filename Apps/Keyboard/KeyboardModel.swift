@@ -31,6 +31,9 @@ final class KeyboardModel: ObservableObject {
     @Published var currentWord = ""
     @Published var showStyles = false
     @Published var showEmoji = false
+    /// The space bar is held: the keyboard is a trackpad for the cursor.
+    @Published private(set) var trackpadActive = false
+    private var navigator: CursorNavigator?
     @Published private(set) var recentEmoji: [String] = UserDefaults.standard.stringArray(forKey: "recentEmoji") ?? []
     /// Slide across the letters to type a word (Wispen › Settings).
     private(set) var swipeTyping = true
@@ -402,11 +405,40 @@ final class KeyboardModel: ObservableObject {
         updateSuggestions()
     }
 
-    func moveCursor(by offset: Int) {
-        proxy?.adjustTextPosition(byCharacterOffset: offset)
+    // MARK: Space-bar trackpad
+
+    /// Takes a snapshot of the text around the cursor to move through (the text iOS reports lags
+    /// behind cursor moves, so it isn't re-read while the trackpad is in use).
+    func beginTrackpad() {
+        guard let proxy else { return }
+        navigator = CursorNavigator(before: proxy.documentContextBeforeInput ?? "",
+                                    after: proxy.documentContextAfterInput ?? "",
+                                    lineWidth: estimatedLineWidth)
         lastAutocorrect = nil
         lastSwipe = nil
+        withAnimation(.easeOut(duration: 0.2)) { trackpadActive = true }
+    }
+
+    /// Moves the cursor sideways by characters and up or down by lines.
+    func trackpadMove(characters: Int, lines: Int) {
+        guard var nav = navigator else { return }
+        let offset = nav.move(characters: characters, lines: lines)
+        navigator = nav
+        if offset != 0 { proxy?.adjustTextPosition(byCharacterOffset: offset) }
+    }
+
+    func endTrackpad() {
+        navigator = nil
+        withAnimation(.easeOut(duration: 0.2)) { trackpadActive = false }
+        updateShift()
         updateSuggestions()
+    }
+
+    /// About how many characters fit on a line in the app (it can't tell the keyboard): the
+    /// screen width at a typical 17-point text size.
+    private var estimatedLineWidth: Int {
+        let width = controller?.view.bounds.width ?? 390
+        return max(20, Int((width - 32) / 8.4))
     }
 
     func shiftTapped() {

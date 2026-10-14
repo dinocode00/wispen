@@ -289,7 +289,7 @@ struct SettingsView: View {
             } header: {
                 Text("Wispen keyboard")
             } footer: {
-                Text("Autocorrect: \(app.settings.keyboardAutocorrectStrength.detail) The fix shows in bold above the keys before you press space; tap your own spelling to keep it. Backspace right after a correction undoes it, and Wispen won't correct that word again. Swipe to type: slide one finger across the letters without lifting; other likely words appear above the keys, and backspace removes the whole word. Tap 🙂 for emoji. Key click sounds need Allow Full Access. Drag the space bar to move the cursor.")
+                Text("Autocorrect: \(app.settings.keyboardAutocorrectStrength.detail) The fix shows in bold above the keys before you press space; tap your own spelling to keep it. Backspace right after a correction undoes it, and Wispen won't correct that word again. Swipe to type: slide one finger across the letters without lifting; other likely words appear above the keys, and backspace removes the whole word. Tap 🙂 for emoji. Key click sounds need Allow Full Access. Hold or drag the space bar to move the cursor: slide sideways, and up or down a line.")
             }
             Section {
                 Toggle("Dynamic Island & Lock Screen", isOn: $app.settings.liveActivities)

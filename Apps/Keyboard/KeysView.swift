@@ -179,7 +179,10 @@ struct KeyCell: View {
     private var cap: some View {
         ThemedKeyCap(palette: palette, isMod: isMod, fillOverride: fillOverride,
                      lit: lit && !(showsPopup && model.effects.effect == .none),
-                     effect: model.effects.effect) { label }
+                     effect: model.effects.effect) {
+            // In trackpad mode (hold the space bar) the letters fade away, like the system keyboard.
+            label.opacity(model.trackpadActive ? 0 : 1)
+        }
             .overlay(alignment: .bottom) {
                 if showsPopup {
                     Text(displayCharacter)
@@ -278,8 +281,11 @@ final class KeyTouchView: UIView {
         let spec: KeySpec
         let effectID = UUID()
         let start: CGPoint
-        var cursorOrigin: CGFloat = 0
-        var movedCursor = false
+        /// Space bar only: moving the cursor around the text like a trackpad.
+        var trackpad = false
+        /// Where the finger was when the cursor last moved.
+        var padOrigin: CGPoint = .zero
+        var last: CGPoint
         /// Could still become a swipe: a letter, touched while no other finger is down.
         var canSwipe: Bool
         var swiping = false
@@ -300,6 +306,12 @@ final class KeyTouchView: UIView {
     private var swipeTouch: ObjectIdentifier?
     private let trail = CAShapeLayer()
 
+    // Space-bar trackpad
+    private var trackpadTouch: ObjectIdentifier?
+    private var trackpadTimer: Timer?
+    /// Finger travel per character sideways, and per line up or down.
+    private let padStep = CGSize(width: 9, height: 18)
+
     override init(frame: CGRect) {
         super.init(frame: frame)
         isMultipleTouchEnabled = true
@@ -319,8 +331,8 @@ final class KeyTouchView: UIView {
         for touch in touches.sorted(by: { $0.timestamp < $1.timestamp }) {
             let id = ObjectIdentifier(touch)
             let point = touch.location(in: self)
-            // While a swipe is under way, other fingers are ignored.
-            if swipeTouch != nil { continue }
+            // While swiping or moving the cursor, other fingers are ignored.
+            if swipeTouch != nil || trackpadTouch != nil { continue }
             guard let index = KeyHitTest.index(of: point, in: keys.map(\.frame)) else { continue }
             let spec = keys[index].spec
 
@@ -343,9 +355,16 @@ final class KeyTouchView: UIView {
             let alone = self.touches.isEmpty
             // A second finger means tapping, not swiping.
             for key in self.touches.keys { self.touches[key]?.canSwipe = false }
-            self.touches[id] = Touch(spec: spec, start: point,
+            self.touches[id] = Touch(spec: spec, start: point, last: point,
                                      canSwipe: alone && isLetter && model.swipeTyping && decoder != nil,
                                      path: [point])
+            if spec.kind == .space {
+                // Holding the space bar turns the keyboard into a trackpad for the cursor.
+                trackpadTimer?.invalidate()
+                trackpadTimer = Timer.scheduledTimer(withTimeInterval: 0.4, repeats: false) { [weak self] _ in
+                    Task { @MainActor in self?.enterTrackpad(id) }
+                }
+            }
             model.presses.down.insert(spec.id)
             model.presses.lit.insert(spec.id)
             let canvasPoint = model.effects.canvas.map { touch.location(in: $0) } ?? point
@@ -380,19 +399,22 @@ final class KeyTouchView: UIView {
                 if t.swiping { drawTrail(t.path) }
                 self.touches[id] = t
             } else if t.spec.kind == .space {
-                // Drag on the space bar to move the cursor, like the system keyboard.
-                let step: CGFloat = 9
-                let delta = touch.location(in: self).x - t.start.x - t.cursorOrigin
-                if abs(delta) >= step {
-                    let chars = Int(delta / step)
-                    model.moveCursor(by: chars)
-                    t.cursorOrigin += CGFloat(chars) * step
-                    if !t.movedCursor {
-                        t.movedCursor = true
-                        tracker.suppress(id)
-                    }
-                }
+                let p = touch.location(in: self)
+                t.last = p
                 self.touches[id] = t
+                // Sliding along the space bar starts the trackpad straight away, without the hold.
+                if !t.trackpad, abs(p.x - t.start.x) >= padStep.width || abs(p.y - t.start.y) >= padStep.height {
+                    enterTrackpad(id)
+                }
+                guard var t = self.touches[id], t.trackpad else { continue }
+                let chars = Int((p.x - t.padOrigin.x) / padStep.width)
+                let lines = Int((p.y - t.padOrigin.y) / padStep.height)
+                if chars != 0 || lines != 0 {
+                    model.trackpadMove(characters: chars, lines: lines)
+                    t.padOrigin.x += CGFloat(chars) * padStep.width
+                    t.padOrigin.y += CGFloat(lines) * padStep.height
+                    self.touches[id] = t
+                }
             }
         }
     }
@@ -415,7 +437,15 @@ final class KeyTouchView: UIView {
                 continue
             }
             guard let t = self.touches.removeValue(forKey: id) else { continue }
-            if t.swiping {
+            if t.spec.kind == .space {
+                trackpadTimer?.invalidate()
+                trackpadTimer = nil
+            }
+            if t.trackpad {
+                trackpadTouch = nil
+                _ = tracker.end(id)
+                model.endTrackpad()
+            } else if t.swiping {
                 swipeTouch = nil
                 endTrail()
                 _ = tracker.end(id)
@@ -483,6 +513,22 @@ final class KeyTouchView: UIView {
         case .emoji: model.showEmoji = true
         case .shift, .delete, .globe: break
         }
+    }
+
+    // MARK: Space-bar trackpad
+
+    private func enterTrackpad(_ id: ObjectIdentifier) {
+        guard var t = touches[id], t.spec.kind == .space, !t.trackpad, trackpadTouch == nil, let model else { return }
+        trackpadTimer?.invalidate()
+        trackpadTimer = nil
+        t.trackpad = true
+        // Movement counts from here, so the hold or the first nudge doesn't jump the cursor.
+        t.padOrigin = t.last
+        touches[id] = t
+        trackpadTouch = id
+        tracker.suppress(id)
+        model.presses.down.remove(t.spec.id)
+        model.beginTrackpad()
     }
 
     // MARK: Swipe typing
