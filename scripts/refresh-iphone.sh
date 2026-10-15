@@ -40,8 +40,27 @@ if [[ "$installed_commit" == "$now" ]] && (( age_days < 4 )); then
   exit 0
 fi
 echo "$(date): installing on iPhone (behind: $([[ "$installed_commit" != "$now" ]] && echo yes || echo no), age: $age_days d)"
-if WISPEN_QUIET=1 /bin/bash "$ROOT/scripts/setup.sh" --iphone && [[ "$(cat "$BUILD/iphone-installed-commit" 2>/dev/null)" == "$now" ]]; then
+# setup.sh exits quietly when the iPhone isn't reachable, so success means a new install time.
+WISPEN_QUIET=1 /bin/bash "$ROOT/scripts/setup.sh" --iphone
+if (( $(cat "$BUILD/iphone-installed-at" 2>/dev/null || echo 0) > installed_at )) \
+    && [[ "$(cat "$BUILD/iphone-installed-commit" 2>/dev/null)" == "$now" ]]; then
   if [[ "$installed_commit" != "$now" ]]; then
     notify "Updated on your iPhone: $(git log -1 --format='%s' | cut -c1-80)"
+  fi
+  rm -f "$BUILD/expiry-notified"
+elif (( installed_at > 0 )); then
+  # Renewal failed (usually the iPhone wasn't reachable). Once it's been failing for half a day of
+  # the 3-day window, warn on the Mac, at most every 12 hours.
+  hours_left=$(( 168 - ($(date +%s) - installed_at) / 3600 ))
+  if (( hours_left <= 60 )) && [[ -z "$(find "$BUILD/expiry-notified" -mmin -720 2>/dev/null)" ]]; then
+    touch "$BUILD/expiry-notified"
+    if (( hours_left <= 0 )); then
+      when="has expired"
+    elif (( hours_left < 24 )); then
+      when="expires in $hours_left hours"
+    else
+      when="expires in $(( hours_left / 24 )) days"
+    fi
+    notify "Wispen on your iPhone $when. Unlock it on the same Wi-Fi as this Mac (or plug it in) so it can renew."
   fi
 fi
