@@ -31,11 +31,12 @@ if [[ "$now" != "$before" ]]; then
   fi
 fi
 
-# 2. iPhone: install when it's behind, or when the signature is about to expire.
+# 2. iPhone: install when it's behind, or from day 4 on, leaving a 3-day window to renew before
+#    the 7-day signature expires.
 installed_commit="$(cat "$BUILD/iphone-installed-commit" 2>/dev/null || true)"
 installed_at="$(cat "$BUILD/iphone-installed-at" 2>/dev/null || echo 0)"
 age_days=$(( ($(date +%s) - installed_at) / 86400 ))
-if [[ "$installed_commit" == "$now" ]] && (( age_days < 5 )); then
+if [[ "$installed_commit" == "$now" ]] && (( age_days < 4 )); then
   exit 0
 fi
 echo "$(date): installing on iPhone (behind: $([[ "$installed_commit" != "$now" ]] && echo yes || echo no), age: $age_days d)"
