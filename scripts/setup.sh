@@ -186,7 +186,18 @@ build() { # scheme, destination, extra args…
         -allowProvisioningUpdates -skipMacroValidation -skipPackagePluginValidation "$@" >"$LOG" 2>&1; then
       return 0
     fi
-    if grep -q "Developer Mode disabled" "$LOG"; then
+    if grep -q "No Accounts" "$LOG"; then
+      if [[ "$QUIET" == 1 ]]; then
+        # Remind at most twice a day, not on every 5-minute check.
+        if [[ -z "$(find "$BUILD/signed-out-notified" -mmin -720 2>/dev/null)" ]]; then
+          touch "$BUILD/signed-out-notified"
+          osascript -e 'display notification "Xcode is signed out of your Apple ID, so Wispen can'"'"'t be renewed on your iPhone. Open Xcode › Settings › Accounts and sign in." with title "Wispen"' >/dev/null 2>&1 || true
+        fi
+        fail "Xcode is signed out of your Apple ID."
+      fi
+      warn "Xcode isn't signed in to your Apple ID, so it can't sign Wispen."
+      echo "     Open Xcode › Settings… › Accounts, click + › Apple ID and sign in, then come back here."
+    elif grep -q "Developer Mode disabled" "$LOG"; then
       [[ "$QUIET" == 1 ]] && fail "Developer Mode is off on the iPhone."
       warn "Developer Mode isn't on yet. On the iPhone: Settings › Privacy & Security › Developer Mode › On."
       echo "     After it restarts, unlock it and tap “Turn On”."
