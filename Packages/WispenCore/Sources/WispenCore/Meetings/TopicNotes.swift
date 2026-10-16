@@ -8,16 +8,21 @@ import Foundation
 public struct TopicNote: Sendable, Equatable {
     public var title: String
     public var summary: String
+    /// Information worth keeping: facts, numbers, ideas, explanations. Most of a conversation lands here.
+    public var points: [String] = []
     public var decisions: [String] = []
     public var actions: [ActionItem] = []
     public var open: [String] = []
     public var concerns: [String] = []
     public var later: [String] = []
+    /// The words each decision / action / question / concern is based on, by item text (lowercased).
+    public var quotes: [String: String] = [:]
 
-    public init(title: String, summary: String, decisions: [String] = [], actions: [ActionItem] = [],
+    public init(title: String, summary: String, points: [String] = [], decisions: [String] = [], actions: [ActionItem] = [],
                 open: [String] = [], concerns: [String] = [], later: [String] = []) {
         self.title = title
         self.summary = summary
+        self.points = points
         self.decisions = decisions
         self.actions = actions
         self.open = open
@@ -25,16 +30,19 @@ public struct TopicNote: Sendable, Equatable {
         self.later = later
     }
 
-    var isEmpty: Bool { summary.isEmpty && decisions.isEmpty && actions.isEmpty && open.isEmpty && concerns.isEmpty }
+    func quote(for item: String) -> String? { quotes[item.lowercased()] }
+
+    var isEmpty: Bool { summary.isEmpty && points.isEmpty && decisions.isEmpty && actions.isEmpty && open.isEmpty && concerns.isEmpty }
 }
 
 public enum TopicNotesParser {
-    private enum Tag { case topic, summary, decision, action, open, concern, later }
+    private enum Tag { case topic, summary, point, decision, action, open, concern, later }
 
     private static func tag(_ word: String) -> Tag? {
         switch word.lowercased().trimmingCharacters(in: .whitespaces) {
         case "topic", "subject", "title": return .topic
         case "summary", "discussion": return .summary
+        case "point", "points", "key point", "fact", "insight", "info", "detail": return .point
         case "decision", "decisions", "decided": return .decision
         case "action", "actions", "action item", "action items", "task", "todo", "to-do": return .action
         case "open", "open question", "open questions", "question", "questions": return .open
@@ -87,45 +95,82 @@ public enum TopicNotesParser {
         return n.isEmpty || n.hasPrefix("none") || ["n/a", "na", "nothing", "no", "not discussed", "not applicable"].contains(n)
     }
 
+    /// Splits `item | "the words it's based on"` into the item and its quote.
+    static func splitQuote(_ value: String) -> (String, String?) {
+        let pattern = "\\s*(?:\\||—|–|-|;)?\\s*(?:\\(?\\s*(?:quote|said|evidence)\\s*:?\\s*)?[\"“]([^\"“”]{3,})[\"”]\\s*\\)?\\s*\\.?$"
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]),
+              let m = regex.firstMatch(in: value, range: NSRange(value.startIndex..., in: value)),
+              let whole = Range(m.range, in: value), let q = Range(m.range(at: 1), in: value) else {
+            return (value, nil)
+        }
+        let item = String(value[..<whole.lowerBound]).trimmed
+        // A sentence that is entirely a quote isn't an item with evidence.
+        guard !item.isEmpty else { return (value, nil) }
+        return (item, String(value[q]).trimmed)
+    }
+
     private static func add(_ value: String, as tag: Tag, to note: inout TopicNote) {
-        let v = clean(value)
+        let (raw, quote) = [.topic, .summary, .point].contains(tag) ? (value, nil) : splitQuote(value)
+        let v = clean(raw)
         guard !isNone(v) else { return }
+        var key = v
         switch tag {
         case .topic: note.title = v
         case .summary: note.summary = note.summary.isEmpty ? v : note.summary + " " + v
+        case .point: appendUnique(v, &note.points)
         case .decision: appendUnique(v, &note.decisions)
         case .open: appendUnique(v, &note.open)
         case .concern: appendUnique(v, &note.concerns)
         case .later: appendUnique(v, &note.later)
         case .action:
             let item = RecapParser.parseActionItem(v)
+            key = item.task
             if !note.actions.contains(where: { $0.task.caseInsensitiveCompare(item.task) == .orderedSame }) {
                 note.actions.append(item)
             }
         }
+        if let quote { note.quotes[key.lowercased()] = quote }
     }
 
     static func appendUnique(_ item: String, _ list: inout [String]) {
         if !list.contains(where: { $0.caseInsensitiveCompare(item) == .orderedSame }) { list.append(item) }
     }
 
-    public static func render(_ note: TopicNote) -> String {
+    public static func render(_ note: TopicNote, quotes: Bool = true) -> String {
+        func q(_ item: String) -> String {
+            guard quotes, let quote = note.quote(for: item) else { return "" }
+            return " | \"\(quote)\""
+        }
         var lines = ["TOPIC: \(note.title)"]
         if !note.summary.isEmpty { lines.append("SUMMARY: \(note.summary)") }
-        lines += note.decisions.map { "DECISION: \($0)" }
+        lines += note.points.map { "POINT: \($0)" }
+        lines += note.decisions.map { "DECISION: \($0)\(q($0))" }
         lines += note.actions.map { a in
             var s = "ACTION: \(a.owner ?? "Unassigned"): \(a.task)"
             if let due = a.due { s += " (due: \(due))" }
-            return s
+            return s + q(a.task)
         }
-        lines += note.open.map { "OPEN: \($0)" }
-        lines += note.concerns.map { "CONCERN: \($0)" }
-        lines += note.later.map { "LATER: \($0)" }
+        lines += note.open.map { "OPEN: \($0)\(q($0))" }
+        lines += note.concerns.map { "CONCERN: \($0)\(q($0))" }
+        lines += note.later.map { "LATER: \($0)\(q($0))" }
         return lines.joined(separator: "\n")
     }
 
-    public static func render(_ notes: [TopicNote]) -> String {
-        notes.map(render).joined(separator: "\n\n")
+    public static func render(_ notes: [TopicNote], quotes: Bool = true) -> String {
+        notes.map { render($0, quotes: quotes) }.joined(separator: "\n\n")
+    }
+
+    /// Drops every decision / action / question / concern whose quote (or, without one, whose
+    /// wording) isn't in the transcript part the note was written from.
+    public static func grounded(_ note: TopicNote, in source: Grounding.Source) -> TopicNote {
+        var n = note
+        func keep(_ item: String) -> Bool { Grounding.isSupported(item, quote: note.quote(for: item), in: source) }
+        n.decisions = note.decisions.filter(keep)
+        n.actions = note.actions.filter { keep($0.task) }
+        n.open = note.open.filter(keep)
+        n.concerns = note.concerns.filter(keep)
+        n.later = note.later.filter(keep)
+        return n
     }
 
     /// Combine notes without a model (fallback).
@@ -133,6 +178,8 @@ public enum TopicNotesParser {
         var out = TopicNote(title: title ?? notes.first?.title ?? "", summary: "")
         out.summary = notes.map(\.summary).filter { !$0.isEmpty }.joined(separator: " ")
         for n in notes {
+            n.points.forEach { appendUnique($0, &out.points) }
+            out.quotes.merge(n.quotes) { a, _ in a }
             n.decisions.forEach { appendUnique($0, &out.decisions) }
             n.open.forEach { appendUnique($0, &out.open) }
             n.concerns.forEach { appendUnique($0, &out.concerns) }

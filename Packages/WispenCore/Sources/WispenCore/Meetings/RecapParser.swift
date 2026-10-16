@@ -4,10 +4,11 @@ import Foundation
 /// (markdown headings, bold, numbering, "None" placeholders, missing sections).
 public enum RecapParser {
     enum Section: CaseIterable {
-        case title, summary, keyPoints, decisions, actionItems, openQuestions, risks, followUps
+        case kind, title, summary, keyPoints, decisions, actionItems, openQuestions, risks, followUps
 
         var aliases: [String] {
             switch self {
+            case .kind: return ["kind", "type", "conversation type", "meeting type"]
             case .title: return ["title", "meeting title"]
             case .summary: return ["summary", "overview", "tldr", "tl;dr"]
             case .keyPoints: return ["key points", "key discussion points", "discussion points", "highlights", "main points"]
@@ -72,6 +73,11 @@ public enum RecapParser {
         let item = bulletText(line)
         guard !item.isEmpty, !isNone(item), !item.hasPrefix("<") else { return }
         switch section {
+        case .kind:
+            if recap.kind == nil {
+                let k = item.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: " .\"<>"))
+                recap.kind = Prompts.recapKinds.first { k.hasPrefix($0) } ?? (k.isEmpty ? nil : k)
+            }
         case .title: if recap.title.isEmpty { recap.title = item.trimmingCharacters(in: CharacterSet(charactersIn: "\"")) }
         case .summary: summary.append(item)
         case .keyPoints: appendUnique(item, to: &recap.keyPoints)

@@ -76,28 +76,53 @@ public enum Prompts {
 
     static let topicBlockFormat = """
     TOPIC: <3-6 word subject title>
-    SUMMARY: <2-3 sentences: what was discussed, the positions people took, and where it landed>
-    DECISION: <something the group clearly agreed on or chose>
-    ACTION: <Owner>: <task someone committed to or was asked to do> (due: <when>)
-    OPEN: <question raised that is still unanswered>
-    CONCERN: <risk, blocker or worry someone raised>
-    LATER: <subject explicitly postponed to another meeting>
+    SUMMARY: <2-3 sentences: what was discussed, the reasoning, and where it landed>
+    POINT: <an important fact, number, idea, explanation or opinion that was shared>
+    DECISION: <what the group explicitly agreed on> | "<the exact words where it was agreed>"
+    ACTION: <Owner>: <task> (due: <when>) | "<the exact words where it was promised or asked>"
+    OPEN: <question that was asked and not answered> | "<the exact words>"
+    CONCERN: <a worry about a specific problem that could hurt a plan> | "<the exact words>"
+    LATER: <subject explicitly put off to another time> | "<the exact words>"
     """
 
+    /// Strict definitions with counter-examples: small models otherwise turn every idea into an
+    /// "action" and every opinion into a "decision" (the over-extraction research keeps finding).
     static let topicRules = """
     Rules:
-    - Synthesize: explain the substance and the reasoning, don't list every remark. Skip greetings and small talk.
-    - DECISION, ACTION, OPEN, CONCERN and LATER lines are optional. Include one only when the transcript clearly \
-    supports it; most topics have just a few. Repeat the tag on a new line for each item.
-    - Never invent names, numbers or dates. Speakers appear as labels like "Speaker 1"; if someone is addressed \
-    by name, use the name. Use "Unassigned" when no owner was said, and leave out "(due: …)" when no date was said.
+    - Most conversations are mainly information. Use POINT lines for what was learned or shared; \
+    0 to 5 per subject. Keep names, numbers and dates.
+    - DECISION, ACTION, OPEN, CONCERN and LATER are rare. Most subjects have none. Only write one when the \
+    transcript clearly says it, and end it with the speaker's exact words in quotes.
+    - ACTION only when someone promises to do a specific task ("I'll send it", "I will check") or is asked and \
+    agrees. NOT an action: ideas, suggestions ("we could", "maybe", "it'd be good to"), advice, habits, or \
+    things already done. Write those as POINT.
+    - DECISION only when people clearly agree on a choice ("let's go with", "agreed", "we'll do"). NOT a \
+    decision: opinions, preferences or proposals nobody confirmed. Write those as POINT.
+    - CONCERN only for a stated worry about a real problem. A fact or challenge mentioned in passing is a POINT.
+    - When unsure, write a POINT.
+    - Never invent names, numbers or dates. Speakers appear as labels like "Speaker 1"; if someone is \
+    addressed by name, use the name. Use "Unassigned" when no owner was said; leave out "(due: …)" when no \
+    date was said.
     - Output only the blocks, separated by a blank line.
+
+    Example
+    Transcript:
+    Speaker 1: Our churn dropped to 3 percent after the onboarding change.
+    Speaker 2: Nice. We could maybe try a newsletter at some point too.
+    Speaker 1: Yeah, maybe. I'll send you the churn numbers tomorrow.
+    Notes:
+    TOPIC: Churn after onboarding change
+    SUMMARY: Churn fell to 3% after the onboarding change. A newsletter came up as a loose idea.
+    POINT: Churn dropped to 3% after the onboarding change.
+    POINT: A newsletter was floated as a possible idea; nothing was decided.
+    ACTION: Speaker 1: Send the churn numbers to Speaker 2 (due: tomorrow) | "I'll send you the churn numbers tomorrow"
     """
 
     public static func topicNotesInstructions(part: Int, of total: Int) -> String {
         """
-        You take notes on part \(part) of \(total) of a meeting transcript. Each line starts with who is speaking.
-        Work out the distinct subjects discussed in this part (usually 1 to 4) and write one block per subject:
+        You take notes on part \(part) of \(total) of a conversation transcript. Each line starts with who is \
+        speaking. Work out the distinct subjects discussed in this part (usually 1 to 4) and write one block per \
+        subject. Each block uses these lines (only TOPIC and SUMMARY are required):
 
         \(topicBlockFormat)
 
@@ -128,41 +153,75 @@ public enum Prompts {
 
     - Later statements win: if a question was answered later, drop it from OPEN; if a plan changed, keep only the \
     final decision; if a concern was resolved, drop it.
-    - Remove duplicates and keep concrete details (names, numbers, dates).
+    - Remove duplicates and keep concrete details (names, numbers, dates). Keep each item's quote as it is.
     - SUMMARY: 2-4 sentences telling the story of this subject: what was discussed, the reasoning or disagreement, \
-    and the outcome.
+    and the outcome. Keep the most useful POINT lines (at most 6).
     - Output only the one block.
     """
 
-    public static let finalRecapInstructions = """
-    You write the final recap of a meeting from notes on each subject it covered.
+    /// Second look at each candidate item, in a fresh context (Chain-of-Verification style): only
+    /// the item and the words it came from, so the model judges the evidence, not the template.
+    public static func verifyItemsInstructions(guidance: RecapGuidance) -> String {
+        var s = """
+        You check items a note-taker pulled from a conversation. For each numbered item you get its type and the \
+        exact words it is based on. Answer keep only when those words really show that type:
+        - ACTION: someone promised to do a specific task, or was asked and agreed. Not ideas, suggestions, \
+        "we could", "maybe", advice or things already done.
+        - DECISION: people clearly agreed on a choice. Not opinions or unconfirmed proposals.
+        - OPEN: a real question that was left unanswered.
+        - CONCERN: a stated worry about a specific problem that could hurt a plan. Not a neutral fact.
+        - LATER: a subject explicitly put off to another time.
+        Otherwise answer drop. When in doubt, drop.
+        Output one line per item, like:
+        1 = keep
+        2 = drop
+        """
+        if !guidance.removed.isEmpty {
+            s += "\n\nThe user removed these from earlier recaps as not real (learn from them):\n"
+            s += guidance.removed.suffix(6).map { "- \($0.section.uppercased()): \($0.text)" }.joined(separator: "\n")
+        }
+        if !guidance.preferences.trimmed.isEmpty {
+            s += "\n\nThe user's own guidance: \(guidance.preferences.trimmed.prefix(300))"
+        }
+        return s
+    }
 
-    Use exactly this format:
-    TITLE: <3-7 words>
-    SUMMARY: <2-4 sentences: why the meeting happened and its main outcomes>
-    KEY POINTS:
-    - <the most important takeaways, most important first>
-    DECISIONS:
-    - <firm agreements only — not ideas or proposals>
-    ACTION ITEMS:
-    - <Owner>: <concrete task> (due: <when>)
-    OPEN QUESTIONS:
-    - <questions still unresolved at the end of the meeting>
-    RISKS:
-    - <risks, blockers and concerns that could affect the outcome>
-    FOLLOW-UPS:
-    - <subjects to revisit in a future discussion (not tasks)>
+    public static func verifyItemsPrompt(_ items: [(kind: String, text: String, quote: String?)]) -> String {
+        items.enumerated().map { i, item in
+            "\(i + 1). \(item.kind): \(item.text)\n   Words: \"\(item.quote ?? item.text)\""
+        }.joined(separator: "\n") + "\n\nAnswers:"
+    }
 
-    Rules:
-    - KEY POINTS are 3 to 6 self-contained insights that synthesize the discussion (why it matters, what was \
-    concluded). Don't repeat decisions or tasks there.
-    - Put each item in exactly ONE section: the best fit. Merge items that overlap.
-    - At most 6 items per section, most important first. Write "None" when a section has nothing.
-    - Use only what is in the notes; keep names, numbers and dates. Each item must make sense on its own.
-    """
+    public static let recapKinds = ["briefing", "learning", "brainstorm", "discussion", "planning",
+                                    "decision", "status update", "interview", "one-on-one", "casual"]
+
+    public static func finalRecapInstructions(guidance: RecapGuidance) -> String {
+        var s = """
+        You write the top of a recap of a conversation from notes on each subject it covered. Decisions, action \
+        items and questions are listed separately, so don't list them here.
+
+        Use exactly this format:
+        KIND: <one of: \(recapKinds.joined(separator: ", "))>
+        TITLE: <3-7 words>
+        SUMMARY: <2-4 sentences: what the conversation was about and what came out of it>
+        KEY POINTS:
+        - <the most valuable takeaways, most important first>
+
+        Rules:
+        - KIND describes the conversation as a whole: "briefing" or "learning" when it was mostly sharing \
+        information, "decision" only when choices were made.
+        - KEY POINTS are 3 to 8 self-contained insights a reader would want to remember: facts, numbers, \
+        explanations, conclusions and why they matter. Fit the number to how much substance there was.
+        - Use only what is in the notes; keep names, numbers and dates.
+        """
+        if !guidance.preferences.trimmed.isEmpty {
+            s += "\n- The user's own guidance: \(guidance.preferences.trimmed.prefix(300))"
+        }
+        return s
+    }
 
     public static func notesPrompt(_ notes: [TopicNote]) -> String {
-        TopicNotesParser.render(notes) + "\n\nRecap:"
+        TopicNotesParser.render(notes, quotes: false) + "\n\nRecap:"
     }
 
     public static func transcriptPrompt(_ transcript: String) -> String {

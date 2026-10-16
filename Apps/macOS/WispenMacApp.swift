@@ -210,6 +210,8 @@ struct MacGeneralView: View {
                 Text("Labels the transcript “Me” and “Others”. macOS asks for Screen & System Audio Recording permission the first time. Wear headphones for the cleanest transcript.")
             }
 
+            RecapSettingsSection()
+
             Section {
                 ForEach(appRules, id: \.0) { rule in
                     let (bundleID, styleID) = rule

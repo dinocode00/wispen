@@ -402,7 +402,7 @@ final class MeetingRecorder: ObservableObject {
         recapStage = "Reading transcript…"
         recapProgress = 0
         do {
-            let recap = try await MeetingSummarizer(generator: generator).summarize(transcript: m.transcriptText) { done, total, stage in
+            let recap = try await MeetingSummarizer(generator: generator, guidance: app.settings.recapGuidance).summarize(transcript: m.transcriptText) { done, total, stage in
                 Task { @MainActor [weak self] in
                     self?.recapStage = stage
                     self?.recapProgress = total > 0 ? Double(done) / Double(total) : 0

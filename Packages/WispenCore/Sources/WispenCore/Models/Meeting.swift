@@ -51,6 +51,8 @@ public struct RecapTopic: Codable, Hashable, Identifiable, Sendable {
 public struct MeetingRecap: Codable, Hashable, Sendable {
     public var title: String
     public var summary: String
+    /// What kind of conversation it was ("briefing", "planning", …), as the model judged it.
+    public var kind: String?
     /// The meeting's subjects in order ("chapters"), each with a short synthesized summary.
     public var topics: [RecapTopic]
     public var keyPoints: [String]
@@ -78,6 +80,7 @@ public struct MeetingRecap: Codable, Hashable, Sendable {
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         title = try c.decodeIfPresent(String.self, forKey: .title) ?? ""
+        kind = try c.decodeIfPresent(String.self, forKey: .kind)
         summary = try c.decodeIfPresent(String.self, forKey: .summary) ?? ""
         topics = try c.decodeIfPresent([RecapTopic].self, forKey: .topics) ?? []
         keyPoints = try c.decodeIfPresent([String].self, forKey: .keyPoints) ?? []
@@ -91,6 +94,41 @@ public struct MeetingRecap: Codable, Hashable, Sendable {
     public var isEmpty: Bool {
         summary.isEmpty && topics.isEmpty && keyPoints.isEmpty && decisions.isEmpty && actionItems.isEmpty
             && openQuestions.isEmpty && risks.isEmpty && followUps.isEmpty
+    }
+}
+
+/// An item you removed from a recap because it wasn't real ("we could try X" listed as an action).
+/// Later recaps are shown these, so they learn what you don't count as an action, decision, etc.
+public struct RecapCorrection: Codable, Hashable, Sendable {
+    /// "action", "decision", "open", "concern" or "later".
+    public var section: String
+    public var text: String
+    public var date: Date
+
+    public init(section: String, text: String, date: Date = Date()) {
+        self.section = section
+        self.text = text
+        self.date = date
+    }
+
+    public static let limit = 30
+
+    /// Adds a correction, newest last, keeping the list short.
+    public static func record(_ c: RecapCorrection, in list: [RecapCorrection]) -> [RecapCorrection] {
+        var out = list.filter { !($0.section == c.section && $0.text.caseInsensitiveCompare(c.text) == .orderedSame) }
+        out.append(c)
+        return Array(out.suffix(limit))
+    }
+}
+
+/// What the recap writer knows about your preferences.
+public struct RecapGuidance: Sendable {
+    public var preferences: String
+    public var removed: [RecapCorrection]
+
+    public init(preferences: String = "", removed: [RecapCorrection] = []) {
+        self.preferences = preferences
+        self.removed = removed
     }
 }
 

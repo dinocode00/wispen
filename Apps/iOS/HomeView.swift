@@ -309,6 +309,7 @@ struct SettingsView: View {
             } footer: {
                 Text("Labels the transcript Speaker 1, Speaker 2… (tap a speaker in a transcript to name them). The audio is kept in a temporary file only until that's done, then deleted.")
             }
+            RecapSettingsSection()
             SharedSettingsSections()
             Section {
                 LabeledContent("Version", value: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0")

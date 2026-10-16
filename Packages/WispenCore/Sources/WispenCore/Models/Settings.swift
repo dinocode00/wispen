@@ -81,6 +81,11 @@ public struct WispenSettings: Codable, Equatable, Sendable {
     /// Tell speakers apart in meeting transcripts ("Speaker 1", "Speaker 2"…). The audio is kept in a
     /// temporary file until that's done, then deleted.
     public var meetingSpeakerLabels: Bool = true
+    /// Optional instructions for meeting recaps, in your own words.
+    public var recapPreferences: String = ""
+    /// Recap items you removed as not real; recent ones guide later recaps.
+    public var recapCorrections: [RecapCorrection] = []
+    public var recapGuidance: RecapGuidance { RecapGuidance(preferences: recapPreferences, removed: recapCorrections) }
 
     // iOS keyboard
     /// Legacy on/off switch; `keyboardAutocorrectStrength` replaced it.
@@ -135,6 +140,8 @@ public struct WispenSettings: Codable, Equatable, Sendable {
         historyLimit = try c.decodeIfPresent(Int.self, forKey: .historyLimit) ?? d.historyLimit
         meetingCaptureSystemAudio = try c.decodeIfPresent(Bool.self, forKey: .meetingCaptureSystemAudio) ?? d.meetingCaptureSystemAudio
         meetingSpeakerLabels = try c.decodeIfPresent(Bool.self, forKey: .meetingSpeakerLabels) ?? d.meetingSpeakerLabels
+        recapPreferences = try c.decodeIfPresent(String.self, forKey: .recapPreferences) ?? d.recapPreferences
+        recapCorrections = (try? c.decodeIfPresent([RecapCorrection].self, forKey: .recapCorrections)) ?? d.recapCorrections
         keyboardAutoCorrect = try c.decodeIfPresent(Bool.self, forKey: .keyboardAutoCorrect) ?? d.keyboardAutoCorrect
         keyboardAutocorrectStrength = (try? c.decodeIfPresent(AutocorrectStrength.self, forKey: .keyboardAutocorrectStrength))
             ?? (keyboardAutoCorrect ? d.keyboardAutocorrectStrength : .off)

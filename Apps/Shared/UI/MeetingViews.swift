@@ -290,6 +290,10 @@ struct RecapView: View {
                     Text(formatDuration(meeting.duration))
                     Text("·")
                     Text("\(meeting.wordCount) words")
+                    if let kind = meeting.recap?.kind {
+                        Text("·")
+                        Text(kind.capitalized)
+                    }
                 }
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -338,10 +342,14 @@ struct RecapView: View {
                     bulletSection("Key points", icon: "star", color: .wispenAccent, items: recap.keyPoints)
                     if !recap.actionItems.isEmpty {
                         RecapSection(title: "Action items", icon: "checklist", color: .green) {
-                            ForEach(recap.actionItems) { item in ActionItemRow(meeting: meeting, item: item) }
+                            ForEach(recap.actionItems) { item in
+                                ActionItemRow(meeting: meeting, item: item)
+                                    .contextMenu { removeButton("action", item.task, label: "Not a real action item") }
+                            }
                         }
                     }
-                    bulletSection("Decisions", icon: "checkmark.seal", color: .blue, items: recap.decisions)
+                    bulletSection("Decisions", icon: "checkmark.seal", color: .blue, items: recap.decisions,
+                                  section: "decision", removeLabel: "Not a real decision")
                     if !recap.topics.isEmpty {
                         RecapSection(title: "Topics discussed", icon: "list.bullet.rectangle", color: .purple) {
                             ForEach(recap.topics) { topic in
@@ -355,9 +363,17 @@ struct RecapView: View {
                             }
                         }
                     }
-                    bulletSection("Open questions", icon: "questionmark.bubble", color: .orange, items: recap.openQuestions)
-                    bulletSection("Risks & concerns", icon: "exclamationmark.triangle", color: .red, items: recap.risks)
-                    bulletSection("Follow-ups", icon: "arrow.uturn.forward", color: .teal, items: recap.followUps)
+                    bulletSection("Open questions", icon: "questionmark.bubble", color: .orange, items: recap.openQuestions,
+                                  section: "open", removeLabel: "Not an open question")
+                    bulletSection("Risks & concerns", icon: "exclamationmark.triangle", color: .red, items: recap.risks,
+                                  section: "concern", removeLabel: "Not a real concern")
+                    bulletSection("Follow-ups", icon: "arrow.uturn.forward", color: .teal, items: recap.followUps,
+                                  section: "later", removeLabel: "Not a follow-up")
+                    if recap.decisions.count + recap.actionItems.count + recap.openQuestions.count + recap.risks.count
+                        + recap.followUps.count > 0 {
+                        Text("Long-press an item that doesn't belong to remove it. Later recaps learn from it.")
+                            .font(.caption).foregroundStyle(.tertiary)
+                    }
                 }
             }
             .padding()
@@ -367,7 +383,8 @@ struct RecapView: View {
     }
 
     @ViewBuilder
-    private func bulletSection(_ title: String, icon: String, color: Color, items: [String]) -> some View {
+    private func bulletSection(_ title: String, icon: String, color: Color, items: [String],
+                               section: String? = nil, removeLabel: String = "") -> some View {
         if !items.isEmpty {
             RecapSection(title: title, icon: icon, color: color) {
                 ForEach(items, id: \.self) { item in
@@ -375,8 +392,53 @@ struct RecapView: View {
                         Text("•").foregroundStyle(color)
                         Text(item).textSelection(.enabled)
                     }
+                    .contextMenu {
+                        if let section { removeButton(section, item, label: removeLabel) }
+                    }
                 }
             }
+        }
+    }
+
+    /// Removes the item and remembers it, so later recaps learn what doesn't count.
+    private func removeButton(_ section: String, _ text: String, label: String) -> some View {
+        Button(role: .destructive) {
+            var m = app.meetings.first(where: { $0.id == meeting.id }) ?? meeting
+            guard var recap = m.recap else { return }
+            switch section {
+            case "action": recap.actionItems.removeAll { $0.task == text }
+            case "decision": recap.decisions.removeAll { $0 == text }
+            case "open": recap.openQuestions.removeAll { $0 == text }
+            case "concern": recap.risks.removeAll { $0 == text }
+            default: recap.followUps.removeAll { $0 == text }
+            }
+            m.recap = recap
+            app.save(m)
+            app.settings.recapCorrections = RecapCorrection.record(RecapCorrection(section: section, text: text),
+                                                                   in: app.settings.recapCorrections)
+        } label: {
+            Label("Remove · \(label)", systemImage: "minus.circle")
+        }
+    }
+}
+
+/// Settings for meeting recaps (iPhone and Mac).
+struct RecapSettingsSection: View {
+    @EnvironmentObject var app: AppModel
+
+    var body: some View {
+        Section {
+            TextField("e.g. I mostly record learning conversations — focus on insights.",
+                      text: $app.settings.recapPreferences, axis: .vertical)
+                .lineLimit(2...5)
+            if !app.settings.recapCorrections.isEmpty {
+                LabeledContent("Learned from removed items", value: "\(app.settings.recapCorrections.count)")
+                Button("Forget what it learned", role: .destructive) { app.settings.recapCorrections = [] }
+            }
+        } header: {
+            Text("Recap instructions (optional)")
+        } footer: {
+            Text("Recaps only list action items, decisions, questions and concerns that were clearly said, and keep the rest as key points. You don't need to write anything here; it's for anything you'd like recaps to do differently. Removing an item from a recap (long-press it) also teaches later recaps.")
         }
     }
 }
