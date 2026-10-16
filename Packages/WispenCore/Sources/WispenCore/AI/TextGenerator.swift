@@ -23,6 +23,20 @@ public protocol TextGenerator: Sendable {
     /// Total context window (instructions + prompt + response), in tokens.
     var contextTokens: Int { get }
     func generate(instructions: String, prompt: String, temperature: Double?) async throws -> String
+    /// Same, but the answer stops after about `maxTokens` (a runaway answer can't fill the context).
+    func generate(instructions: String, prompt: String, temperature: Double?, maxTokens: Int) async throws -> String
+}
+
+public extension TextGenerator {
+    func generate(instructions: String, prompt: String, temperature: Double?, maxTokens: Int) async throws -> String {
+        try await generate(instructions: instructions, prompt: prompt, temperature: temperature)
+    }
+
+    /// The answer limit that still fits the context window with this input.
+    func responseLimit(instructions: String, prompt: String, wanted: Int) -> Int {
+        let left = contextTokens - TokenEstimator.estimate(instructions + prompt) - 32
+        return max(64, min(wanted, left))
+    }
 }
 
 /// Rough token estimate, deliberately conservative so chunks never overflow a small context.

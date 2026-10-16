@@ -100,6 +100,7 @@ public enum Prompts {
     decision: opinions, preferences or proposals nobody confirmed. Write those as POINT.
     - CONCERN only for a stated worry about a real problem. A fact or challenge mentioned in passing is a POINT.
     - When unsure, write a POINT.
+    - Never repeat a line. Stop after the last block.
     - Never invent names, numbers or dates. Speakers appear as labels like "Speaker 1"; if someone is \
     addressed by name, use the name. Use "Unassigned" when no owner was said; leave out "(due: …)" when no \
     date was said.

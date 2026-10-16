@@ -43,9 +43,15 @@ struct AppleIntelligenceGenerator: TextGenerator {
     }
 
     func generate(instructions: String, prompt: String, temperature: Double?) async throws -> String {
+        try await generate(instructions: instructions, prompt: prompt, temperature: temperature, maxTokens: 2000)
+    }
+
+    func generate(instructions: String, prompt: String, temperature: Double?, maxTokens: Int) async throws -> String {
         let session = LanguageModelSession(instructions: instructions)
+        let limit = responseLimit(instructions: instructions, prompt: prompt, wanted: maxTokens)
         do {
-            let response = try await session.respond(to: prompt, options: GenerationOptions(temperature: temperature))
+            let response = try await session.respond(
+                to: prompt, options: GenerationOptions(temperature: temperature, maximumResponseTokens: limit))
             return response.content
         } catch let error as LanguageModelSession.GenerationError {
             switch error {

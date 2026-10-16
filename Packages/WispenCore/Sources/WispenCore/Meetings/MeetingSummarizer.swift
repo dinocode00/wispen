@@ -26,7 +26,7 @@ public struct MeetingSummarizer: Sendable {
     /// Tokens reserved for instructions + response.
     public var reservedTokens: Int
 
-    public init(generator: TextGenerator, guidance: RecapGuidance = RecapGuidance(), reservedTokens: Int = 1900) {
+    public init(generator: TextGenerator, guidance: RecapGuidance = RecapGuidance(), reservedTokens: Int = 2000) {
         self.generator = generator
         self.guidance = guidance
         self.reservedTokens = reservedTokens
@@ -92,7 +92,7 @@ public struct MeetingSummarizer: Sendable {
             let output = try await generator.generate(
                 instructions: Prompts.topicNotesInstructions(part: part, of: total),
                 prompt: Prompts.transcriptPrompt(chunk),
-                temperature: 0.2)
+                temperature: 0.2, maxTokens: 900)
             let source = Grounding.Source(chunk)
             return TopicNotesParser.parse(OutputSanitizer.clean(output)).map { TopicNotesParser.grounded($0, in: source) }
         } catch LLMError.contextOverflow where depth < 3 {
@@ -111,7 +111,7 @@ public struct MeetingSummarizer: Sendable {
         let prompt = Prompts.groupTopicsPrompt(notes)
         guard TokenEstimator.estimate(prompt) <= inputBudget,
               let output = try? await generator.generate(instructions: Prompts.groupTopicsInstructions,
-                                                         prompt: prompt, temperature: 0) else {
+                                                         prompt: prompt, temperature: 0, maxTokens: 300) else {
             return Self.groupByTitle(notes)
         }
         let groups = TopicNotesParser.parseGroups(OutputSanitizer.clean(output), count: notes.count)
@@ -143,7 +143,7 @@ public struct MeetingSummarizer: Sendable {
             return await mergeTopic([a, b], title: title)
         }
         guard let output = try? await generator.generate(instructions: Prompts.mergeTopicInstructions,
-                                                         prompt: prompt, temperature: 0.2),
+                                                         prompt: prompt, temperature: 0.2, maxTokens: 700),
               var merged = TopicNotesParser.parse(OutputSanitizer.clean(output)).first,
               !merged.summary.isEmpty else {
             return fallback
@@ -205,7 +205,8 @@ public struct MeetingSummarizer: Sendable {
                 end += 1
             }
             if let output = try? await generator.generate(instructions: instructions,
-                                                          prompt: Prompts.verifyItemsPrompt(batch), temperature: 0) {
+                                                          prompt: Prompts.verifyItemsPrompt(batch), temperature: 0,
+                                                          maxTokens: 8 * batch.count + 40) {
                 for (i, verdict) in Self.parseVerdicts(OutputSanitizer.clean(output)) where i < batch.count {
                     keep[start + i] = verdict
                 }
@@ -261,7 +262,7 @@ public struct MeetingSummarizer: Sendable {
         var recap = MeetingRecap()
         if TokenEstimator.estimate(Prompts.notesPrompt(input)) <= inputBudget,
            let output = try? await generator.generate(instructions: Prompts.finalRecapInstructions(guidance: guidance),
-                                                      prompt: Prompts.notesPrompt(input), temperature: 0.2) {
+                                                      prompt: Prompts.notesPrompt(input), temperature: 0.2, maxTokens: 700) {
             let parsed = RecapParser.parse(OutputSanitizer.clean(output))
             recap.kind = parsed.kind
             recap.title = parsed.title

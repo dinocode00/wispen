@@ -27,7 +27,7 @@ public struct OllamaGenerator: TextGenerator {
 
     struct ChatRequest: Encodable {
         struct Message: Encodable { let role: String; let content: String }
-        struct Options: Encodable { let temperature: Double?; let num_ctx: Int }
+        struct Options: Encodable { let temperature: Double?; let num_ctx: Int; var num_predict: Int? = nil }
         let model: String
         let messages: [Message]
         let stream: Bool
@@ -41,6 +41,15 @@ public struct OllamaGenerator: TextGenerator {
     }
 
     public func generate(instructions: String, prompt: String, temperature: Double?) async throws -> String {
+        try await chat(instructions: instructions, prompt: prompt, temperature: temperature, maxTokens: nil)
+    }
+
+    public func generate(instructions: String, prompt: String, temperature: Double?, maxTokens: Int) async throws -> String {
+        try await chat(instructions: instructions, prompt: prompt, temperature: temperature,
+                       maxTokens: responseLimit(instructions: instructions, prompt: prompt, wanted: maxTokens))
+    }
+
+    private func chat(instructions: String, prompt: String, temperature: Double?, maxTokens: Int?) async throws -> String {
         var request = URLRequest(url: baseURL.appendingPathComponent("api/chat"))
         request.httpMethod = "POST"
         request.timeoutInterval = 180
@@ -49,7 +58,7 @@ public struct OllamaGenerator: TextGenerator {
             model: model,
             messages: [.init(role: "system", content: instructions), .init(role: "user", content: prompt)],
             stream: false,
-            options: .init(temperature: temperature, num_ctx: contextTokens)))
+            options: .init(temperature: temperature, num_ctx: contextTokens, num_predict: maxTokens)))
         let data: Data
         do {
             (data, _) = try await URLSession.shared.data(for: request)
