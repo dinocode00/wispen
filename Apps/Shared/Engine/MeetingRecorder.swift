@@ -393,10 +393,17 @@ final class MeetingRecorder: ObservableObject {
             return
         }
 
+        // Apple Intelligence barely runs for apps in the background: wait until Wispen is open.
+        guard canUseModelNow else {
+            pauseRecap(&m)
+            return
+        }
+
         let background = beginBackgroundWork()
         defer { endBackgroundWork(background) }
 
         m.status = .summarizing
+        m.recapPaused = nil
         m.errorMessage = nil
         app.save(m)
         recapStage = "Reading transcript…"
@@ -414,10 +421,32 @@ final class MeetingRecorder: ObservableObject {
             m.recapOutdated = nil
             if m.title.isEmpty { m.title = recap.title }
             m.status = .ready
+        } catch LLMError.rateLimited {
+            m = app.meetings.first(where: { $0.id == meetingID }) ?? m
+            pauseRecap(&m)
+            return
         } catch {
             m.status = .failed
             m.errorMessage = error.localizedDescription
         }
+        app.save(m)
+        recapStage = nil
+    }
+
+    private var canUseModelNow: Bool {
+        #if os(iOS)
+        app.settings.llmProvider != .appleIntelligence || UIApplication.shared.applicationState != .background
+        #else
+        true
+        #endif
+    }
+
+    /// Saves the meeting as waiting for its recap, to be written the next time Wispen is open.
+    private func pauseRecap(_ m: inout Meeting) {
+        m.status = .needsRecap
+        m.recapPaused = true
+        m.errorMessage = "Apple Intelligence needs a short break. The recap will be written when Wispen is open — "
+            + "or tap “Generate recap” in a minute."
         app.save(m)
         recapStage = nil
     }

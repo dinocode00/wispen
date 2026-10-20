@@ -4,6 +4,9 @@ public enum LLMError: Error, Equatable, LocalizedError {
     case unavailable(String)
     case contextOverflow
     case refused
+    /// The system asked us to slow down (Apple Intelligence limits how often an app, especially one in
+    /// the background, can use the model). Worth trying again later; not a reason to give up.
+    case rateLimited
     case failed(String)
 
     public var errorDescription: String? {
@@ -11,6 +14,7 @@ public enum LLMError: Error, Equatable, LocalizedError {
         case .unavailable(let why): return "Language model unavailable: \(why)"
         case .contextOverflow: return "The text was too long for the on-device model."
         case .refused: return "The model declined to process this text."
+        case .rateLimited: return "Apple Intelligence is busy. Wispen will try again in a moment."
         case .failed(let why): return why
         }
     }

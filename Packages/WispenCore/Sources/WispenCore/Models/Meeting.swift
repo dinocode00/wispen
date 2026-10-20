@@ -172,6 +172,8 @@ public struct Meeting: Codable, Hashable, Identifiable, Sendable {
     public var expectedSpeakers: Int?
     /// Speakers or lines were changed after the recap was written.
     public var recapOutdated: Bool?
+    /// The recap was paused because Apple Intelligence asked to slow down; it resumes when Wispen is open.
+    public var recapPaused: Bool?
 
     public init(id: String = UUID().uuidString, title: String = "", startedAt: Date = Date(), duration: Double = 0,
                 status: Status = .recording, segments: [TranscriptSegment] = [], recap: MeetingRecap? = nil,

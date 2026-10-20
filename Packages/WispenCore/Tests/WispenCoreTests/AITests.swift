@@ -288,6 +288,19 @@ final class AITests: XCTestCase {
         XCTAssertEqual(recap.keyPoints.count, 2)
     }
 
+    func testRateLimitStopsTheRecapInsteadOfDegradingIt() async {
+        let gen = FakeGenerator { instructions, _ in
+            if instructions.contains("You take notes") { return "TOPIC: Trip\nSUMMARY: Talked about Lisbon.\nPOINT: Lisbon is hilly." }
+            throw LLMError.rateLimited
+        }
+        do {
+            _ = try await MeetingSummarizer(generator: gen).summarize(transcript: "Speaker 1: Lisbon is very hilly.")
+            XCTFail("expected the recap to pause")
+        } catch {
+            XCTAssertEqual(error as? LLMError, .rateLimited)
+        }
+    }
+
     func testNoCheckWhenThereIsNothingToCheck() async throws {
         let gen = FakeGenerator { instructions, _ in
             XCTAssertFalse(instructions.contains("You check items"))

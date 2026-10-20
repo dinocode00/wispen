@@ -46,7 +46,8 @@ struct WispenApp: App {
     /// If the app was closed while a recap was being written, finish it now.
     private func resumeUnfinishedRecaps() {
         guard !recorder.isRecording else { return }
-        for meeting in app.meetings where meeting.status == .summarizing || (meeting.status == .recording && !meeting.segments.isEmpty) {
+        for meeting in app.meetings where meeting.status == .summarizing || (meeting.status == .recording && !meeting.segments.isEmpty)
+            || (meeting.status == .needsRecap && meeting.recapPaused == true) {
             Task { await recorder.summarize(meetingID: meeting.id) }
         }
     }

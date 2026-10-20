@@ -3,6 +3,9 @@ import WispenCore
 #if canImport(FoundationModels)
 import FoundationModels
 #endif
+#if os(iOS)
+import UIKit
+#endif
 
 /// Builds the language model chosen in Settings, or nil for rule-based cleanup only.
 enum GeneratorFactory {
@@ -47,6 +50,23 @@ struct AppleIntelligenceGenerator: TextGenerator {
     }
 
     func generate(instructions: String, prompt: String, temperature: Double?, maxTokens: Int) async throws -> String {
+        // Apple Intelligence limits how often an app may use the model, much more so in the background.
+        // While Wispen is open, wait and try again; in the background, report it so the work can resume
+        // when Wispen is opened.
+        let waits: [UInt64] = [3, 8, 15, 30]
+        for attempt in 0...waits.count {
+            do {
+                return try await respond(instructions: instructions, prompt: prompt, temperature: temperature,
+                                         maxTokens: maxTokens)
+            } catch LLMError.rateLimited where attempt < waits.count {
+                guard await Self.appIsActive else { throw LLMError.rateLimited }
+                try await Task.sleep(nanoseconds: waits[attempt] * 1_000_000_000)
+            }
+        }
+        throw LLMError.rateLimited
+    }
+
+    private func respond(instructions: String, prompt: String, temperature: Double?, maxTokens: Int) async throws -> String {
         let session = LanguageModelSession(instructions: instructions)
         let limit = responseLimit(instructions: instructions, prompt: prompt, wanted: maxTokens)
         do {
@@ -57,9 +77,21 @@ struct AppleIntelligenceGenerator: TextGenerator {
             switch error {
             case .exceededContextWindowSize: throw LLMError.contextOverflow
             case .guardrailViolation: throw LLMError.refused
-            default: throw LLMError.failed(error.localizedDescription)
+            case .rateLimited: throw LLMError.rateLimited
+            default:
+                // Too many requests at once is the same kind of "slow down".
+                if "\(error)".localizedCaseInsensitiveContains("concurrent") { throw LLMError.rateLimited }
+                throw LLMError.failed(error.localizedDescription)
             }
         }
+    }
+
+    @MainActor static var appIsActive: Bool {
+        #if os(iOS)
+        UIApplication.shared.applicationState == .active
+        #else
+        true
+        #endif
     }
 
     static func status() -> (ready: Bool, message: String) {

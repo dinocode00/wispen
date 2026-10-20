@@ -56,7 +56,7 @@ public struct MeetingSummarizer: Sendable {
         var topics = notes
         if chunks.count > 1, notes.count > 1 {
             progress?(done, total, "Connecting topics")
-            let groups = await groupTopics(notes)
+            let groups = try await groupTopics(notes)
             done += 1
             progress?(done, total, "Combining notes per topic")
             let source = Grounding.Source(text)
@@ -67,7 +67,7 @@ public struct MeetingSummarizer: Sendable {
                     topics.append(members[0])
                 } else {
                     // The merge may reword items; they still have to match what was said.
-                    topics.append(TopicNotesParser.grounded(await mergeTopic(members, title: group.title), in: source))
+                    topics.append(TopicNotesParser.grounded(try await mergeTopic(members, title: group.title), in: source))
                 }
             }
             done += 1
@@ -75,17 +75,30 @@ public struct MeetingSummarizer: Sendable {
 
         // 4. Second look at every decision / action / question / concern.
         progress?(done, total, "Checking action items")
-        let items = await verifiedItems(topics)
+        let items = try await verifiedItems(topics)
         done += 1
 
         // 5. Final recap.
         progress?(done, total, "Writing recap")
-        let recap = await finalRecap(topics, items: items)
+        let recap = try await finalRecap(topics, items: items)
         progress?(total, total, "Done")
         return recap
     }
 
     // MARK: Steps
+
+    /// A model call whose failure has a fallback: nil on failure, except that "slow down" stops the
+    /// recap (to be resumed later) instead of quietly producing a worse one.
+    private func ask(instructions: String, prompt: String, temperature: Double, maxTokens: Int) async throws -> String? {
+        do {
+            return try await generator.generate(instructions: instructions, prompt: prompt,
+                                                temperature: temperature, maxTokens: maxTokens)
+        } catch LLMError.rateLimited {
+            throw LLMError.rateLimited
+        } catch {
+            return nil
+        }
+    }
 
     private func topicNotes(_ chunk: String, part: Int, of total: Int, depth: Int) async throws -> [TopicNote] {
         do {
@@ -107,10 +120,10 @@ public struct MeetingSummarizer: Sendable {
         }
     }
 
-    private func groupTopics(_ notes: [TopicNote]) async -> [(indices: [Int], title: String?)] {
+    private func groupTopics(_ notes: [TopicNote]) async throws -> [(indices: [Int], title: String?)] {
         let prompt = Prompts.groupTopicsPrompt(notes)
         guard TokenEstimator.estimate(prompt) <= inputBudget,
-              let output = try? await generator.generate(instructions: Prompts.groupTopicsInstructions,
+              let output = try await ask(instructions: Prompts.groupTopicsInstructions,
                                                          prompt: prompt, temperature: 0, maxTokens: 300) else {
             return Self.groupByTitle(notes)
         }
@@ -131,18 +144,18 @@ public struct MeetingSummarizer: Sendable {
         return order.map { (map[$0]!, notes[map[$0]![0]].title) }
     }
 
-    private func mergeTopic(_ members: [TopicNote], title: String?) async -> TopicNote {
+    private func mergeTopic(_ members: [TopicNote], title: String?) async throws -> TopicNote {
         let fallback = TopicNotesParser.mechanicalMerge(members, title: title)
         let prompt = TopicNotesParser.render(members) + "\n\nCombined:"
         if TokenEstimator.estimate(prompt) > inputBudget {
             // Too much for one call: merge each half, then the two results.
             let mid = members.count / 2
             guard mid > 0 else { return fallback }
-            let a = await mergeTopic(Array(members[..<mid]), title: title)
-            let b = await mergeTopic(Array(members[mid...]), title: title)
-            return await mergeTopic([a, b], title: title)
+            let a = try await mergeTopic(Array(members[..<mid]), title: title)
+            let b = try await mergeTopic(Array(members[mid...]), title: title)
+            return try await mergeTopic([a, b], title: title)
         }
-        guard let output = try? await generator.generate(instructions: Prompts.mergeTopicInstructions,
+        guard let output = try await ask(instructions: Prompts.mergeTopicInstructions,
                                                          prompt: prompt, temperature: 0.2, maxTokens: 700),
               var merged = TopicNotesParser.parse(OutputSanitizer.clean(output)).first,
               !merged.summary.isEmpty else {
@@ -174,7 +187,7 @@ public struct MeetingSummarizer: Sendable {
         var action: ActionItem?
     }
 
-    private func verifiedItems(_ topics: [TopicNote]) async -> Items {
+    private func verifiedItems(_ topics: [TopicNote]) async throws -> Items {
         // Collect, merging near-duplicates from different subjects.
         var candidates: [Candidate] = []
         func add(_ kind: String, _ text: String, _ quote: String?, _ action: ActionItem? = nil) {
@@ -204,7 +217,7 @@ public struct MeetingSummarizer: Sendable {
                 batch = next
                 end += 1
             }
-            if let output = try? await generator.generate(instructions: instructions,
+            if let output = try await ask(instructions: instructions,
                                                           prompt: Prompts.verifyItemsPrompt(batch), temperature: 0,
                                                           maxTokens: 8 * batch.count + 40) {
                 for (i, verdict) in Self.parseVerdicts(OutputSanitizer.clean(output)) where i < batch.count {
@@ -245,7 +258,7 @@ public struct MeetingSummarizer: Sendable {
     /// Conversations that are mostly about sharing information get fewer secondary lists.
     static let informationalKinds: Set<String> = ["briefing", "learning", "interview", "casual", "brainstorm"]
 
-    private func finalRecap(_ topics: [TopicNote], items: Items) async -> MeetingRecap {
+    private func finalRecap(_ topics: [TopicNote], items: Items) async throws -> MeetingRecap {
         var input = topics
         if TokenEstimator.estimate(Prompts.notesPrompt(input)) > inputBudget {
             // Shorten each subject to the first two sentences and its top three points.
@@ -261,7 +274,7 @@ public struct MeetingSummarizer: Sendable {
         }
         var recap = MeetingRecap()
         if TokenEstimator.estimate(Prompts.notesPrompt(input)) <= inputBudget,
-           let output = try? await generator.generate(instructions: Prompts.finalRecapInstructions(guidance: guidance),
+           let output = try await ask(instructions: Prompts.finalRecapInstructions(guidance: guidance),
                                                       prompt: Prompts.notesPrompt(input), temperature: 0.2, maxTokens: 700) {
             let parsed = RecapParser.parse(OutputSanitizer.clean(output))
             recap.kind = parsed.kind
