@@ -291,6 +291,17 @@ PY
     IFS=$'\t' read -r UDID NAME DEV_MODE <<<"$DEVICE"
   done
 
+  # Free Apple IDs: a provisioning profile expires 7 days after it was made, and Xcode keeps reusing
+  # it, so reinstalling alone doesn't extend anything. When renewing, forget Wispen's cached profiles
+  # so Xcode fetches new ones.
+  if [[ "${WISPEN_FRESH_PROFILE:-0}" == 1 ]]; then
+    for dir in "$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles" "$HOME/Library/MobileDevice/Provisioning Profiles"; do
+      for f in "$dir"/*.mobileprovision "$dir"/*.provisionprofile; do
+        [[ -f "$f" ]] || continue
+        if security cms -D -i "$f" 2>/dev/null | grep -qF ".$PREFIX.wispen"; then rm -f "$f"; fi
+      done
+    done
+  fi
   build Wispen "id=$UDID"
   IPA_APP="$BUILD/DerivedData/Build/Products/Release-iphoneos/Wispen.app"
   if ! xcrun devicectl device install app --device "$UDID" "$IPA_APP" >"$BUILD/install.log" 2>&1; then
@@ -306,6 +317,19 @@ PY
   fi
   echo "$UDID" >"$BUILD/iphone-udid"
   date +%s >"$BUILD/iphone-installed-at"
+  # When the iPhone app actually stops working: the earliest expiry of the app's and its
+  # extensions' profiles.
+  expires=""
+  for prof in "$IPA_APP/embedded.mobileprovision" "$IPA_APP"/PlugIns/*.appex/embedded.mobileprovision; do
+    [[ -f "$prof" ]] || continue
+    d="$(security cms -D -i "$prof" 2>/dev/null | plutil -extract ExpirationDate raw -o - - 2>/dev/null)"
+    t="$(TZ=UTC date -j -f "%Y-%m-%dT%H:%M:%SZ" "$d" +%s 2>/dev/null)" || continue
+    if [[ -z "$expires" ]] || (( t < expires )); then expires="$t"; fi
+  done
+  if [[ -n "$expires" ]]; then
+    echo "$expires" >"$BUILD/iphone-expires-at"
+    [[ "$QUIET" == 1 ]] || ok "Signed until $(date -r "$expires" '+%a %b %-d, %-I:%M %p')"
+  fi
   git -C "$ROOT" rev-parse HEAD >"$BUILD/iphone-installed-commit" 2>/dev/null || true
   ok "Installed on $NAME"
   BUNDLE_ID="$PREFIX.wispen"
