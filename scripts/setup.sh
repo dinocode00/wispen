@@ -186,7 +186,7 @@ build() { # scheme, destination, extra args…
         -allowProvisioningUpdates -skipMacroValidation -skipPackagePluginValidation "$@" >"$LOG" 2>&1; then
       return 0
     fi
-    if grep -q "No Accounts" "$LOG"; then
+    if grep -a -q "No Accounts" "$LOG"; then
       if [[ "$QUIET" == 1 ]]; then
         # Remind at most twice a day, not on every 5-minute check.
         if [[ -z "$(find "$BUILD/signed-out-notified" -mmin -720 2>/dev/null)" ]]; then
@@ -197,19 +197,19 @@ build() { # scheme, destination, extra args…
       fi
       warn "Xcode isn't signed in to your Apple ID, so it can't sign Wispen."
       echo "     Open Xcode › Settings… › Accounts, click + › Apple ID and sign in, then come back here."
-    elif grep -q "Developer Mode disabled" "$LOG"; then
+    elif grep -a -q "Developer Mode disabled" "$LOG"; then
       [[ "$QUIET" == 1 ]] && fail "Developer Mode is off on the iPhone."
       warn "Developer Mode isn't on yet. On the iPhone: Settings › Privacy & Security › Developer Mode › On."
       echo "     After it restarts, unlock it and tap “Turn On”."
-    elif grep -q "needs to be unlocked\|is locked\|Please unlock" "$LOG"; then
+    elif grep -a -q "needs to be unlocked\|is locked\|Please unlock" "$LOG"; then
       [[ "$QUIET" == 1 ]] && fail "iPhone was locked; will try again next time."
       warn "Your iPhone is locked. Unlock it and keep the screen on while Wispen installs"
       echo "     (the first time, Xcode spends a minute or two preparing the iPhone)."
-    elif grep -q "Timed out waiting for all destinations" "$LOG"; then
+    elif grep -a -q "Timed out waiting for all destinations" "$LOG"; then
       [[ "$QUIET" == 1 ]] && fail "iPhone not ready; will try again next time."
       warn "The iPhone isn't ready yet (Xcode may still be preparing it). Keep it unlocked and connected."
     else
-      grep -E "error:" "$LOG" | sed -n '1,20p' || true
+      grep -a -E "error:" "$LOG" | sed -n '1,20p' || true
       fail "Build failed. Full log: $LOG"
     fi
     read -r -p "  Press Return to try again… " _ </dev/tty
