@@ -107,12 +107,37 @@ private struct Toolbar: View {
                     .foregroundStyle(palette.text)
             }
             .buttonStyle(.plain)
-        } else if !model.suggestions.isEmpty {
+        } else if let snippet = model.shortcutSuggestion {
+            Button { model.pickShortcut(snippet) } label: {
+                Label(snippet.expansion.replacingOccurrences(of: "\n", with: " "), systemImage: "text.badge.plus")
+                    .font(.system(size: 15, weight: .semibold))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .foregroundStyle(palette.accent)
+                    .padding(.horizontal, 8)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Insert \(snippet.expansion)")
+        } else if !model.suggestions.isEmpty || !model.emojiSuggestions.isEmpty {
             HStack(spacing: 0) {
                 suggestion("“\(model.currentWord)”", value: model.currentWord)
-                ForEach(model.suggestions, id: \.self) { s in
+                // With emoji there's room for one word suggestion.
+                ForEach(model.suggestions.prefix(model.emojiSuggestions.isEmpty ? 2 : 1), id: \.self) { s in
                     Divider().frame(height: 22)
                     suggestion(s, value: s)
+                }
+                ForEach(model.emojiSuggestions, id: \.self) { e in
+                    Divider().frame(height: 22)
+                    Button { model.pickEmoji(e) } label: {
+                        Text(e)
+                            .font(.system(size: 24))
+                            .frame(width: 42)
+                            .frame(maxHeight: .infinity)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
                 }
             }
         } else {

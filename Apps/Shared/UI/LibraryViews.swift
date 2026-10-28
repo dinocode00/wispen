@@ -154,12 +154,23 @@ struct SnippetsView: View {
         List {
             if app.snippets.isEmpty {
                 ContentUnavailableView("No snippets yet", systemImage: "text.badge.plus",
-                                       description: Text("Say “my email” and get your email address. Say “my calendar link” and get the link."))
+                                       description: Text("Say “my email” and get your email address. Or give a snippet a keyboard shortcut: type “123m” on the Wispen keyboard and tap your full address above the keys."))
             }
             ForEach(app.snippets) { snippet in
                 Button { editing = snippet } label: {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("“\(snippet.trigger)”").font(.body.weight(.medium)).foregroundStyle(.primary)
+                        HStack(spacing: 6) {
+                            if !snippet.trigger.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                Text("“\(snippet.trigger)”").font(.body.weight(.medium)).foregroundStyle(.primary)
+                            }
+                            if let shortcut = snippet.typedShortcut {
+                                Label(shortcut, systemImage: "keyboard")
+                                    .font(.caption.monospaced())
+                                    .padding(.horizontal, 6).padding(.vertical, 2)
+                                    .background(Color.secondary.opacity(0.15), in: Capsule())
+                                    .foregroundStyle(.primary)
+                            }
+                        }
                         Text(snippet.expansion).font(.caption).foregroundStyle(.secondary).lineLimit(2)
                     }
                 }
@@ -188,14 +199,25 @@ struct SnippetEditor: View {
     var onSave: (Snippet) -> Void
     @Environment(\.dismiss) private var dismiss
 
+    private var shortcutBinding: Binding<String> {
+        Binding(get: { snippet.shortcut ?? "" },
+                set: { snippet.shortcut = $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0 })
+    }
+
     var body: some View {
         NavigationStack {
             Form {
                 Section {
-                    TextField("e.g. my email", text: $snippet.trigger).noAutocapitalization()
-                } header: { Text("When I say") }
+                    TextField("e.g. my address", text: $snippet.trigger).noAutocapitalization()
+                } header: { Text("When I say") } footer: { Text("Optional if you set a keyboard shortcut.") }
                 Section {
-                    TextField("e.g. rex@example.com", text: $snippet.expansion, axis: .vertical)
+                    TextField("e.g. 123m", text: shortcutBinding).noAutocapitalization()
+                        .autocorrectionDisabled()
+                } header: { Text("Or when I type (Wispen keyboard)") } footer: {
+                    Text("Type this on the Wispen keyboard and the full text appears above the keys; tap it to insert. Pick something you won't type by accident, like the start of your address plus a letter.")
+                }
+                Section {
+                    TextField("e.g. 123 Main Street, Springfield, IL 62704", text: $snippet.expansion, axis: .vertical)
                         .lineLimit(3...10).noAutocapitalization()
                 } header: { Text("Type this") }
             }
@@ -206,7 +228,7 @@ struct SnippetEditor: View {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") { onSave(snippet); dismiss() }
-                        .disabled(snippet.trigger.trimmingCharacters(in: .whitespaces).isEmpty || snippet.expansion.isEmpty)
+                        .disabled((snippet.trigger.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && snippet.typedShortcut == nil) || snippet.expansion.isEmpty)
                 }
             }
         }

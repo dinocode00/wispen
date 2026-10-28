@@ -15,16 +15,26 @@ public struct DictionaryEntry: Codable, Hashable, Identifiable, Sendable {
     }
 }
 
-/// A voice shortcut: say the trigger, get the expansion.
+/// A shortcut: say the trigger (or type the keyboard shortcut), get the expansion.
 public struct Snippet: Codable, Hashable, Identifiable, Sendable {
     public var id: String
+    /// Spoken phrase ("my address"); may be empty for a keyboard-only snippet.
     public var trigger: String
     public var expansion: String
+    /// Typed on the Wispen keyboard ("123m"), it offers the expansion above the keys.
+    public var shortcut: String?
 
-    public init(id: String = UUID().uuidString, trigger: String, expansion: String) {
+    public init(id: String = UUID().uuidString, trigger: String, expansion: String, shortcut: String? = nil) {
         self.id = id
         self.trigger = trigger
         self.expansion = expansion
+        self.shortcut = shortcut
+    }
+
+    /// The keyboard shortcut, if one is set.
+    public var typedShortcut: String? {
+        guard let s = shortcut?.trimmingCharacters(in: .whitespacesAndNewlines), !s.isEmpty else { return nil }
+        return s
     }
 }
 
@@ -84,7 +94,11 @@ public struct LibraryBundle: Codable, Sendable {
             dictionary.append(entry)
         }
         for snippet in other.snippets {
-            snippets.removeAll { $0.trigger.caseInsensitiveCompare(snippet.trigger) == .orderedSame }
+            snippets.removeAll {
+                $0.id == snippet.id
+                    || (!snippet.trigger.trimmed.isEmpty && $0.trigger.caseInsensitiveCompare(snippet.trigger) == .orderedSame)
+                    || (snippet.typedShortcut != nil && $0.typedShortcut?.caseInsensitiveCompare(snippet.typedShortcut!) == .orderedSame)
+            }
             snippets.append(snippet)
         }
         for style in other.customStyles where !style.isBuiltIn {

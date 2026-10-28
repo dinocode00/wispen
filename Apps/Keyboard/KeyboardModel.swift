@@ -26,6 +26,10 @@ final class KeyboardModel: ObservableObject {
     @Published var layer: Layer = .letters
     @Published var shift: Shift = .once
     @Published var suggestions: [String] = []
+    /// Emoji for the current word ("cool" → 😎), offered next to the word suggestions.
+    @Published private(set) var emojiSuggestions: [String] = []
+    /// A snippet whose keyboard shortcut was just typed: tap to type the whole thing.
+    @Published private(set) var shortcutSuggestion: Snippet?
     /// What space will change the current word to (shown bold in the suggestion bar).
     @Published private(set) var autocorrectPreview: String?
     @Published var currentWord = ""
@@ -40,7 +44,7 @@ final class KeyboardModel: ObservableObject {
     @Published private(set) var returnKeyLabel: String?
 
     let styles: [DictationStyle]
-    let settings: WispenSettings
+    private(set) var settings: WispenSettings
     /// Look and touch effects; changes in the Wispen app apply right away.
     @Published private(set) var theme: KeyboardTheme
     let effects = KeyEffectsEngine()
@@ -59,6 +63,8 @@ final class KeyboardModel: ObservableObject {
     private var lastShiftTap = Date.distantPast
     private let defaults = UserDefaults.standard
     private let protectedTerms: [String]
+    /// Snippets with a keyboard shortcut (reloaded each time the keyboard appears).
+    private var shortcutSnippets: [Snippet] = []
     private let checker = UITextChecker()
     private lazy var checkerLanguage: String = {
         let available = UITextChecker.availableLanguages
@@ -77,7 +83,7 @@ final class KeyboardModel: ObservableObject {
         autocorrector = Autocorrector(strength: settings.keyboardAutocorrectStrength)
         swipeTyping = settings.keyboardSwipeTyping
         // Build the swipe word index off the main thread, before the first swipe needs it.
-        DispatchQueue.global(qos: .utility).async { _ = SwipeIndex.english }
+        DispatchQueue.global(qos: .utility).async { _ = SwipeIndex.english; _ = EmojiSuggester.shared }
         styleID = UserDefaults.standard.string(forKey: "keyboardStyleID") ?? settings.defaultStyleID
         // Your dictionary words are never "misspelled".
         for term in protectedTerms where !UITextChecker.hasLearnedWord(term) { UITextChecker.learnWord(term) }
@@ -117,6 +123,7 @@ final class KeyboardModel: ObservableObject {
 
     func appeared() {
         isVisible = true
+        shortcutSnippets = store.loadSnippets().filter { $0.typedShortcut != nil }
         reloadTheme()
         // Lets the Wispen app show "keyboard set up ✓" (this write only works with Full Access).
         try? FlowIPC.keyboardStatusFile.save(KeyboardStatus(hasFullAccess: hasFullAccess))
@@ -139,6 +146,10 @@ final class KeyboardModel: ObservableObject {
 
     func reloadTheme() {
         let fresh = store.loadSettings()
+        if fresh.keyboardEmojiSuggestions != settings.keyboardEmojiSuggestions {
+            settings.keyboardEmojiSuggestions = fresh.keyboardEmojiSuggestions
+            updateSuggestions()
+        }
         autocorrector.strength = fresh.keyboardAutocorrectStrength
         swipeTyping = fresh.keyboardSwipeTyping
         let t = fresh.keyboardTheme
@@ -530,9 +541,36 @@ final class KeyboardModel: ObservableObject {
         shift = KeyboardTextLogic.shouldCapitalize(before: proxy?.documentContextBeforeInput, mode: mode) ? .once : .off
     }
 
+    /// Types the snippet in place of its shortcut.
+    func pickShortcut(_ snippet: Snippet) {
+        guard let proxy, let shortcut = snippet.typedShortcut else { return }
+        for _ in 0..<shortcut.count { proxy.deleteBackward() }
+        let text = snippet.expansion
+        proxy.insertText(text.last?.isWhitespace == true ? text : text + " ")
+        afterEdit()
+        updateShift()
+        updateSuggestions()
+    }
+
+    /// Replaces the word with its emoji, like the iOS keyboard.
+    func pickEmoji(_ emoji: String) {
+        guard let proxy else { return }
+        for _ in 0..<currentWord.count { proxy.deleteBackward() }
+        proxy.insertText(emoji + " ")
+        afterEdit()
+        recentEmoji = EmojiCatalog.recordUse(emoji, in: recentEmoji)
+        defaults.set(recentEmoji, forKey: "recentEmoji")
+        updateShift()
+        updateSuggestions()
+    }
+
     private func updateSuggestions() {
-        let word = KeyboardTextLogic.currentWord(before: proxy?.documentContextBeforeInput)
+        let before = proxy?.documentContextBeforeInput
+        let word = KeyboardTextLogic.currentWord(before: before)
         currentWord = word
+        shortcutSuggestion = TextShortcuts.match(before: before, in: shortcutSnippets)
+        emojiSuggestions = settings.keyboardEmojiSuggestions && shortcutSuggestion == nil
+            ? EmojiSuggester.shared.emoji(for: word) : []
         if let swipe = lastSwipe, swipe.word == word {
             autocorrectPreview = nil
             suggestions = Array(swipe.alternatives.prefix(2))
@@ -557,7 +595,9 @@ final class KeyboardModel: ObservableObject {
     }
 
     /// Your dictionary words plus words you've taught the keyboard, lowercased.
-    private var protectedSet: Set<String> { Set(protectedTerms.map { $0.lowercased() }).union(learnedWords) }
+    private var protectedSet: Set<String> {
+        Set((protectedTerms + shortcutSnippets.compactMap(\.typedShortcut)).map { $0.lowercased() }).union(learnedWords)
+    }
 
     private func learn(_ word: String) {
         let lower = word.lowercased()
